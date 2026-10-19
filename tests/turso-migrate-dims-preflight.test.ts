@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { cleanupTursoTestDirectory } from "./turso-test-utils.js";
 import { Database } from "bun:sqlite";
 
+const SCOPE_HASH = "2233445566778899";
+
 describe("turso legacy migrator dimension preflight", () => {
   let baseDir: string;
 
@@ -72,5 +74,81 @@ describe("turso legacy migrator dimension preflight", () => {
     expect(mismatch.needsMigration).toBe(true);
     expect(mismatch.shardMismatches).toHaveLength(1);
     expect(mismatch.shardMismatches[0]?.storedDimensions).toBe(4);
+  }, 15000);
+
+  it("flags a model swap when dimensions are unchanged", async () => {
+    baseDir = mkdtempSync(join(tmpdir(), "turso-migrate-model-preflight-"));
+    const { CONFIG } = await import("../src/config.js");
+    CONFIG.storagePath = baseDir;
+    CONFIG.embeddingDimensions = 2;
+    CONFIG.embeddingModel = "Xenova/nomic-embed-text-v1";
+    CONFIG.databaseEncryptionEnabled = false;
+    CONFIG.databaseEncryptionKey = undefined;
+
+    const { tursoShardManager } = await import("../src/services/turso/shard-manager.js");
+    const { tursoConnectionManager } = await import("../src/services/turso/connection-manager.js");
+    const { tursoVectorSearch } = await import("../src/services/turso/vector-search.js");
+
+    const shard = await tursoShardManager.createShard("project", SCOPE_HASH, 0);
+    const db = await tursoConnectionManager.getConnection(shard.dbPath);
+    await tursoVectorSearch.insertVector(db, {
+      id: "mem_model_swap",
+      content: "same dims, different model",
+      vector: new Float32Array([1, 0]),
+      containerTag: `opencode_project_${SCOPE_HASH}`,
+      createdAt: 100,
+      updatedAt: 200,
+    });
+    await tursoShardManager.incrementVectorCount(shard.id);
+
+    // Production scenario: every model in use is 768-dimensional, so only the
+    // model id changes here while the dimension count stays the same.
+    CONFIG.embeddingModel = "onnx-community/embeddinggemma-2-ONNX";
+
+    const { migrationService } = await import("../src/services/migration-service.js");
+    const mismatch = await migrationService.detectDimensionMismatch();
+    expect(mismatch.needsMigration).toBe(true);
+    expect(mismatch.shardMismatches).toHaveLength(1);
+    expect(mismatch.shardMismatches[0]?.storedModel).toBe("Xenova/nomic-embed-text-v1");
+    expect(mismatch.shardMismatches[0]?.storedDimensions).toBe(2);
+  }, 15000);
+
+  it("surfaces unlabelled shards holding vectors but skips empty unlabelled shards", async () => {
+    baseDir = mkdtempSync(join(tmpdir(), "turso-migrate-unknown-model-"));
+    const { CONFIG } = await import("../src/config.js");
+    CONFIG.storagePath = baseDir;
+    CONFIG.embeddingDimensions = 2;
+    CONFIG.embeddingModel = "Xenova/nomic-embed-text-v1";
+    CONFIG.databaseEncryptionEnabled = false;
+    CONFIG.databaseEncryptionKey = undefined;
+
+    const { tursoShardManager } = await import("../src/services/turso/shard-manager.js");
+    const { tursoConnectionManager } = await import("../src/services/turso/connection-manager.js");
+    const { tursoVectorSearch } = await import("../src/services/turso/vector-search.js");
+
+    const withVectors = await tursoShardManager.createShard("project", SCOPE_HASH, 0);
+    const empty = await tursoShardManager.createShard("project", SCOPE_HASH, 1);
+    const dbWithVectors = await tursoConnectionManager.getConnection(withVectors.dbPath);
+    await tursoVectorSearch.insertVector(dbWithVectors, {
+      id: "mem_unlabelled",
+      content: "vectors but no model label",
+      vector: new Float32Array([1, 0]),
+      containerTag: `opencode_project_${SCOPE_HASH}`,
+      createdAt: 100,
+      updatedAt: 200,
+    });
+    await tursoShardManager.incrementVectorCount(withVectors.id);
+
+    // Simulate shards that predate embedding_model labelling.
+    await dbWithVectors.execute(`DELETE FROM shard_metadata WHERE key = 'embedding_model'`, []);
+    const dbEmpty = await tursoConnectionManager.getConnection(empty.dbPath);
+    await dbEmpty.execute(`DELETE FROM shard_metadata WHERE key = 'embedding_model'`, []);
+
+    const { migrationService } = await import("../src/services/migration-service.js");
+    const mismatch = await migrationService.detectDimensionMismatch();
+    expect(mismatch.needsMigration).toBe(true);
+    expect(mismatch.shardMismatches).toHaveLength(1);
+    expect(mismatch.shardMismatches[0]?.shardId).toBe(withVectors.id);
+    expect(mismatch.shardMismatches[0]?.storedModel).toBe("unknown");
   }, 15000);
 });

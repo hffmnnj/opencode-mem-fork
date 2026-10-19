@@ -42,3 +42,8 @@ openspec
 .opencode
 .omo
 package/
+
+# test-run artifacts (coordination DBs created relative to cwd)
+.profile-learning-coordination.db
+.profile-learning-coordination.db-*
+data/

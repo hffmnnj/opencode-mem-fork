@@ -15,6 +15,8 @@ import { tursoConnectionManager } from "./services/turso/connection-manager.js";
 import { WebAuth } from "./services/web-auth.js";
 
 import { isConfigured, CONFIG, initConfig } from "./config.js";
+import { startConfigHotReload } from "./services/config-hot-reload.js";
+import type { ConfigWatcherStop } from "./services/config-watcher.js";
 import { log } from "./services/logger.js";
 import type { MemoryType } from "./types/index.js";
 import { getLanguageName } from "./services/language-detector.js";
@@ -359,10 +361,41 @@ function logAutoCaptureProviderStatus(): void {
   );
 }
 
+/**
+ * Surface the embedding transport at startup. A configured-but-unusable
+ * remote endpoint is reported loudly: the plugin refuses to fall back to the
+ * local CPU model, so the user needs to know why embedding is unavailable.
+ */
+function logEmbeddingProviderStatus(): void {
+  const status = CONFIG.embeddingStatus;
+  // Tolerate a config object without the field (older configs, partial test
+  // stubs): absence is not a misconfiguration.
+  if (!status) return;
+
+  if (status.ready) {
+    log(
+      status.mode === "remote"
+        ? `Embedding transport: remote endpoint ${CONFIG.embeddingApiUrl} (model ${CONFIG.embeddingModel}).`
+        : `Embedding transport: local CPU model ${CONFIG.embeddingModel}.`
+    );
+    return;
+  }
+
+  log(
+    `Embedding transport misconfigured. Issues: ${status.issues.join("; ")}. ` +
+      `Local CPU embeddings are refused while a remote endpoint is configured.`
+  );
+}
+
 export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
   const { directory } = ctx;
   initConfig(directory);
   logAutoCaptureProviderStatus();
+  logEmbeddingProviderStatus();
+  // Hot reload: re-read the plugin config when it changes on disk, so a
+  // settings edit takes effect without restarting OpenCode. The watcher is
+  // keyed by directory and returns a no-op when one is already running.
+  const stopConfigWatcherFn: ConfigWatcherStop = startConfigHotReload(directory);
   const { startAutoUpdate } = await import("./services/auto-update.js");
   startAutoUpdate(ctx, CONFIG.autoUpdate);
   const tags = getTags(directory);
@@ -581,6 +614,7 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
     if (cleanedUp) return;
     cleanedUp = true;
     clearProviderRefreshWiring();
+    stopConfigWatcherFn();
     pluginLifetime.abort();
     for (const timer of idleTimers.values()) clearTimeout(timer);
     idleTimers.clear();

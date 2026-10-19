@@ -3,15 +3,17 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { stripJsoncComments } from "./services/jsonc.js";
 import { resolveSecretValue } from "./services/secret-resolver.js";
+import { log } from "./services/logger.js";
+import { CONFIG_FILES, getProjectConfigPaths } from "./services/config-paths.js";
 import { isPlaceholderApiKey } from "./services/ai/api-key-placeholder.js";
 import { getDefaultInjectionMarkers } from "./services/injected-prompt-filter.js";
 
 const CONFIG_DIR = join(homedir(), ".config", "opencode");
 const DATA_DIR = join(homedir(), ".opencode-mem");
-const CONFIG_FILES = [
-  join(CONFIG_DIR, "opencode-mem.jsonc"),
-  join(CONFIG_DIR, "opencode-mem.json"),
-];
+// Config file locations live in ./services/config-paths.js so the config
+// watcher and plugin setup can share them without importing this module
+// (which would create an import cycle and break module linking).
+export { CONFIG_FILES, getProjectConfigPaths } from "./services/config-paths.js";
 
 if (!existsSync(CONFIG_DIR)) {
   mkdirSync(CONFIG_DIR, { recursive: true });
@@ -309,19 +311,37 @@ function expandPath(path: string): string {
   return path;
 }
 
-function loadConfigFromPaths(paths: string[]): OpenCodeMemConfig {
+interface ConfigLoadResult {
+  config: OpenCodeMemConfig;
+  /** One entry per existing file that could not be read or parsed. */
+  errors: string[];
+  /** True when at least one candidate path existed on disk. */
+  hadCandidate: boolean;
+}
+
+/**
+ * First existing file wins; an unreadable/invalid file is skipped (recorded
+ * in `errors`) so a later fallback path can still apply. When every existing
+ * file fails, the result is `{}` with non-empty `errors` — callers use
+ * `hadCandidate && errors.length > 0` to detect "config present but broken".
+ */
+function loadConfigFromPathsReporting(paths: string[]): ConfigLoadResult {
+  const errors: string[] = [];
+  let hadCandidate = false;
   for (const path of paths) {
     if (existsSync(path)) {
+      hadCandidate = true;
       try {
         const content = readFileSync(path, "utf-8");
         const json = stripJsoncComments(content);
-        return JSON.parse(json) as OpenCodeMemConfig;
-      } catch {
-        // ignore unreadable or invalid config files
+        return { config: JSON.parse(json) as OpenCodeMemConfig, errors, hadCandidate };
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        errors.push(`Failed to load config file ${path}: ${detail}`);
       }
     }
   }
-  return {};
+  return { config: {}, errors, hadCandidate };
 }
 
 const GLOBAL_ONLY_REMOTE_PROVIDER_FIELDS: ReadonlyArray<keyof OpenCodeMemConfig> = [
@@ -958,12 +978,45 @@ export function normalizeInjectionMarkers(value: string[] | undefined): string[]
   return merged;
 }
 
+/**
+ * Non-fatal secret resolution (F3). `resolveSecretValue` throws when an
+ * `env://` variable is unset or a `file://` path is missing; a throw out of
+ * `buildConfig` would abort plugin setup entirely, so an unresolvable secret
+ * resolves to `undefined` and is recorded in `issues` for visibility.
+ */
+function tryResolveSecret(
+  value: string | undefined,
+  fieldName: string,
+  issues: string[]
+): string | undefined {
+  try {
+    return resolveSecretValue(value);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    issues.push(`${fieldName}: ${detail}`);
+    log(`opencode-mem: ignoring unresolvable secret for ${fieldName}`, { error: detail });
+    return undefined;
+  }
+}
+
 function buildConfig(fileConfig: OpenCodeMemConfig) {
+  // Accumulates every secret that was configured but could not be resolved.
+  // Surfaced on CONFIG.configIssues so a bad secret line is visible instead
+  // of silently behaving as "not configured".
+  const secretIssues: string[] = [];
   const memoryProvider = (fileConfig.memoryProvider ?? "openai-chat") as
     "atlas-cloud" | "openai-chat" | "openai-responses" | "anthropic" | "minimax" | "orcarouter";
   const memoryApiKey =
-    resolveSecretValue(fileConfig.memoryApiKey) ??
+    tryResolveSecret(fileConfig.memoryApiKey, "memoryApiKey", secretIssues) ??
     (memoryProvider === "atlas-cloud" ? process.env.ATLASCLOUD_API_KEY : undefined);
+  const embeddingApiUrl = fileConfig.embeddingApiUrl;
+  const embeddingApiKey = embeddingApiUrl
+    ? tryResolveSecret(
+        fileConfig.embeddingApiKey ?? process.env.OPENAI_API_KEY,
+        "embeddingApiKey",
+        secretIssues
+      )
+    : undefined;
   const embeddingModel = fileConfig.embeddingModel ?? DEFAULTS.embeddingModel;
   const embeddingPreset = getEmbeddingModelPreset(embeddingModel);
   const embeddingDimensions =
@@ -980,6 +1033,16 @@ function buildConfig(fileConfig: OpenCodeMemConfig) {
       ? fileConfig.embeddingDocumentPrefix
       : embeddingPreset?.documentPrefix;
   const embeddingDtype = normalizeEmbeddingDtype(fileConfig.embeddingDtype);
+  const embeddingStatus = getEmbeddingProviderStatus(
+    embeddingApiUrl,
+    embeddingApiKey,
+    secretIssues
+  );
+  if (!embeddingStatus.ready) {
+    log("opencode-mem: embedding transport misconfigured", {
+      issues: embeddingStatus.issues,
+    });
+  }
   const autoCaptureMaxContextBytes = normalizeAutoCaptureMaxContextBytes(
     fileConfig.autoCaptureMaxContextBytes ?? DEFAULTS.autoCaptureMaxContextBytes
   );
@@ -1011,10 +1074,10 @@ function buildConfig(fileConfig: OpenCodeMemConfig) {
     embeddingQueryPrefix,
     embeddingDocumentPrefix,
     embeddingDtype,
-    embeddingApiUrl: fileConfig.embeddingApiUrl,
-    embeddingApiKey: fileConfig.embeddingApiUrl
-      ? resolveSecretValue(fileConfig.embeddingApiKey ?? process.env.OPENAI_API_KEY)
-      : undefined,
+    embeddingApiUrl,
+    embeddingApiKey,
+    embeddingStatus,
+    configIssues: secretIssues,
     similarityThreshold: fileConfig.similarityThreshold ?? DEFAULTS.similarityThreshold,
     maxMemories: fileConfig.maxMemories ?? DEFAULTS.maxMemories,
     maxProfileItems: fileConfig.maxProfileItems ?? DEFAULTS.maxProfileItems,
@@ -1051,10 +1114,14 @@ function buildConfig(fileConfig: OpenCodeMemConfig) {
     webServerEnabled: fileConfig.webServerEnabled ?? DEFAULTS.webServerEnabled,
     webServerPort: fileConfig.webServerPort ?? DEFAULTS.webServerPort,
     webServerHost: fileConfig.webServerHost ?? DEFAULTS.webServerHost,
-    webServerAuthPassword: resolveSecretValue(fileConfig.webServerAuthPassword),
+    webServerAuthPassword: tryResolveSecret(
+      fileConfig.webServerAuthPassword,
+      "webServerAuthPassword",
+      secretIssues
+    ),
     webServerAuthUsername: fileConfig.webServerAuthUsername,
     webServerApiToken: fileConfig.webServerApiToken
-      ? resolveSecretValue(fileConfig.webServerApiToken)
+      ? tryResolveSecret(fileConfig.webServerApiToken, "webServerApiToken", secretIssues)
       : undefined,
     maxVectorsPerShard: fileConfig.maxVectorsPerShard ?? DEFAULTS.maxVectorsPerShard,
     autoCleanupEnabled: fileConfig.autoCleanupEnabled ?? DEFAULTS.autoCleanupEnabled,
@@ -1143,8 +1210,15 @@ function buildConfig(fileConfig: OpenCodeMemConfig) {
   };
 }
 
-const _globalFileConfig = loadConfigFromPaths(CONFIG_FILES);
+const _globalLoad = loadConfigFromPathsReporting(CONFIG_FILES);
+for (const error of _globalLoad.errors) {
+  log("opencode-mem: global config load issue", { error });
+}
+const _globalFileConfig = _globalLoad.config;
 export let CONFIG = buildConfig(_globalFileConfig);
+
+/** Parse/read failures from the most recent `initConfig()` call (empty on success). */
+export let lastConfigLoadErrors: string[] = [];
 
 type RuntimeConfig = ReturnType<typeof buildConfig>;
 
@@ -1207,17 +1281,77 @@ export function getAutoCaptureProviderStatus(
   return { ready: false, issues };
 }
 
+export type EmbeddingProviderStatus =
+  | { ready: true; mode: "remote" | "local"; issues: [] }
+  | { ready: false; mode: "misconfigured"; issues: string[] };
+
+/**
+ * Visibility for the remote-embedding transport (F3). The embedding service
+ * refuses the local CPU ONNX path while a remote endpoint is configured but
+ * unusable, so that state is reported as `misconfigured` with a loud issue
+ * instead of degrading silently. Check `CONFIG.embeddingStatus` (and
+ * `configIssues`) wherever a quiet fallback would be dangerous.
+ */
+export function getEmbeddingProviderStatus(
+  embeddingApiUrl: string | undefined,
+  embeddingApiKey: string | undefined,
+  secretIssues: readonly string[] = []
+): EmbeddingProviderStatus {
+  if (!hasValue(embeddingApiUrl)) {
+    return { ready: true, mode: "local", issues: [] };
+  }
+  if (hasValue(embeddingApiKey)) {
+    return { ready: true, mode: "remote", issues: [] };
+  }
+  const resolutionFailure = secretIssues.find((issue) => issue.startsWith("embeddingApiKey:"));
+  const issues = resolutionFailure
+    ? [
+        `embeddingApiKey is configured but could not be resolved (${resolutionFailure}); ` +
+          `remote embeddings unavailable, local CPU embeddings refused`,
+      ]
+    : [
+        `embeddingApiUrl is set but embeddingApiKey is not configured; ` +
+          `remote embeddings unavailable, local CPU embeddings refused`,
+      ];
+  return { ready: false, mode: "misconfigured", issues };
+}
+
 export function hasAutoCaptureProviderConfig(config: RuntimeConfig = CONFIG): boolean {
   return getAutoCaptureProviderStatus(config).ready;
 }
 
 export function initConfig(directory: string): void {
-  const projectPaths = [
-    join(directory, ".opencode", "opencode-mem.jsonc"),
-    join(directory, ".opencode", "opencode-mem.json"),
-  ];
-  const globalConfig = loadConfigFromPaths(CONFIG_FILES);
-  const projectConfig = loadConfigFromPaths(projectPaths);
+  const projectPaths = getProjectConfigPaths(directory);
+  const globalLoad = loadConfigFromPathsReporting(CONFIG_FILES);
+  const projectLoad = loadConfigFromPathsReporting(projectPaths);
+  const loadErrors = [...globalLoad.errors, ...projectLoad.errors];
+  lastConfigLoadErrors = loadErrors;
+  for (const error of loadErrors) {
+    log("opencode-mem: config load issue", { error });
+  }
+  // A file that exists but cannot be parsed must not silently reset the
+  // config to defaults (a half-written save would otherwise wipe live
+  // settings). Keep the last-known-good CONFIG so the next valid save
+  // recovers; the error above is the visible signal.
+  const globalUnusable =
+    globalLoad.hadCandidate &&
+    globalLoad.errors.length > 0 &&
+    Object.keys(globalLoad.config).length === 0;
+  const projectUnusable =
+    projectLoad.hadCandidate &&
+    projectLoad.errors.length > 0 &&
+    Object.keys(projectLoad.config).length === 0;
+  if (globalUnusable || projectUnusable) {
+    log(
+      "opencode-mem: ignoring config reload with unreadable files; keeping previous configuration",
+      {
+        errors: loadErrors,
+      }
+    );
+    return;
+  }
+  const globalConfig = globalLoad.config;
+  const projectConfig = projectLoad.config;
   assertProjectRemoteProviderConfigIsSafe(projectConfig);
   const projectOverrides = { ...projectConfig };
   delete projectOverrides.autoCleanupEnabled;
