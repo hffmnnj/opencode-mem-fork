@@ -42,6 +42,7 @@ describe("turso re-embed migration safety", () => {
         createdAt: 100 + index,
         updatedAt: 200 + index,
         metadata: JSON.stringify({ source: "test", index }),
+        sessionId: `session-${index}`,
         displayName: `Memory ${index}`,
         projectPath: `/project/${index}`,
       });
@@ -98,6 +99,26 @@ describe("turso re-embed migration safety", () => {
       `SELECT value FROM shard_metadata WHERE key = 'embedding_dimensions'`
     );
     expect(Number(metadata?.value)).toBe(4);
+  });
+
+  it("preserves session_id through the re-embed path", async () => {
+    const shard = await createSourceShard();
+    await stubEmbedding();
+    const { CONFIG } = await import("../src/config.js");
+    CONFIG.embeddingDimensions = 4;
+
+    const { migrationService } = await import("../src/services/migration-service.js");
+    const result = await migrationService.migrateToNewModel("re-embed");
+
+    expect(result.success).toBe(true);
+    expect(result.reEmbeddedMemories).toBe(2);
+
+    const { tursoConnectionManager } = await import("../src/services/turso/connection-manager.js");
+    const db = await tursoConnectionManager.getConnection(shard.dbPath);
+    const rows = await db.all(`SELECT id, session_id FROM memories ORDER BY id`);
+    expect(rows).toHaveLength(2);
+    expect(String(rows[0]?.session_id)).toBe("session-0");
+    expect(String(rows[1]?.session_id)).toBe("session-1");
   });
 
   it("leaves the source shard untouched when any embedding fails", async () => {

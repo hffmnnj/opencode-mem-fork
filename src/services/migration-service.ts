@@ -70,8 +70,22 @@ export class MigrationService {
         const storedDimensions = parseInt(String(metadata.embedding_dimensions || "0"));
         const storedModel = String(metadata.embedding_model || "unknown");
 
-        if (storedDimensions !== CONFIG.embeddingDimensions) {
+        if (
+          storedDimensions !== CONFIG.embeddingDimensions ||
+          storedModel !== CONFIG.embeddingModel
+        ) {
           const vectorCount = await tursoVectorSearch.countAllVectors(db);
+          // "unknown" means the shard predates embedding_model labelling. With zero
+          // vectors there is nothing in the wrong embedding space, so flagging it
+          // would trigger a pointless rebuild; with vectors the embedding space is
+          // unverifiable, so surface it for migration.
+          if (
+            storedModel === "unknown" &&
+            storedDimensions === CONFIG.embeddingDimensions &&
+            vectorCount === 0
+          ) {
+            continue;
+          }
           mismatches.push({
             shardId: shard.id,
             dbPath: shard.dbPath,
@@ -268,7 +282,7 @@ export class MigrationService {
     const sourceDb = await tursoConnectionManager.getConnection(shard.dbPath);
     const memories = await sourceDb.all(`
       SELECT
-        id, content, container_tag, tags, type, created_at, updated_at, metadata,
+        id, content, container_tag, tags, type, created_at, updated_at, metadata, session_id,
         display_name, user_name, user_email, project_path, project_name, git_repo_url, is_pinned
       FROM memories
       ORDER BY created_at DESC
