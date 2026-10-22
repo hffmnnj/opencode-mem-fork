@@ -12,7 +12,7 @@ interface MemoryContextHooks {
     input: { sessionID: string },
     output: { message: { id: string }; parts: any[] }
   ): Promise<boolean>;
-  load(sessionID: string): Promise<string>;
+  load(sessionID: string, query?: string): Promise<string>;
 }
 
 const memoryInput = {
@@ -152,7 +152,11 @@ export async function registerV2Adapter(ctx: Context, legacy: any) {
 
     if (memoryContext) {
       try {
-        if (!(await memoryContext.capturePrompt({ sessionID: event.sessionID }, output))) {
+        const captured = await memoryContext.capturePrompt({ sessionID: event.sessionID }, output);
+        // Prompt admission can overlap; only the newest admission may change
+        // suppression or replace its query-derived context.
+        if (messageIDs.get(event.sessionID) !== event.messageID) return;
+        if (!captured) {
           suppressed.add(event.sessionID);
           return;
         }
@@ -161,10 +165,13 @@ export async function registerV2Adapter(ctx: Context, legacy: any) {
         // exist only for one request, so retain that context across user turns.
         if (memoryContext.refreshOnPrompt()) contexts.delete(event.sessionID);
         if (!contexts.has(event.sessionID)) {
-          contexts.set(event.sessionID, await memoryContext.load(event.sessionID));
+          const context = await memoryContext.load(event.sessionID, original.text);
+          if (messageIDs.get(event.sessionID) === event.messageID) {
+            contexts.set(event.sessionID, context);
+          }
         }
       } catch (error) {
-        contexts.delete(event.sessionID);
+        if (messageIDs.get(event.sessionID) === event.messageID) contexts.delete(event.sessionID);
         log("V2 prompt memory context failed", { error: String(error) });
       }
       return;
@@ -189,7 +196,15 @@ export async function registerV2Adapter(ctx: Context, legacy: any) {
         try {
           // Rehydrate from the canonical memory store, without replaying the
           // prompt hook or persisting a second plaintext copy in host storage.
-          contexts.set(event.sessionID, await memoryContext.load(event.sessionID));
+          const messageID = messageIDs.get(event.sessionID);
+          const context = await memoryContext.load(event.sessionID);
+          if (
+            messageIDs.get(event.sessionID) === messageID &&
+            !suppressed.has(event.sessionID) &&
+            !contexts.has(event.sessionID)
+          ) {
+            contexts.set(event.sessionID, context);
+          }
         } catch (error) {
           log("V2 restored memory context failed", { error: String(error) });
         }

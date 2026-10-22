@@ -16,7 +16,7 @@ bun install
 bun test
 bun run typecheck
 bun run check          # format + lint + typecheck
-bun run build
+bunx tsc && bun run web:build # emit in place; build script deletes dist recursively
 bun run web:dev        # web UI only
 ```
 
@@ -88,6 +88,7 @@ chore(deps): bump the minor-and-patch group across 2 directories
 - Prefer existing libraries and utilities already in the tree
 - Do not commit secrets, local data under `data/`, or `node_modules`
 - Intel Mac (`darwin/x64`) is unsupported (Turso / onnxruntime bindings)
+- Isolate module-mocking scenarios in subprocess fixtures when dependencies may already be cached; `mock.restore()` does not reload the dependency graph. See `tests/memory-context-selection.test.ts`.
 
 ## When unsure
 

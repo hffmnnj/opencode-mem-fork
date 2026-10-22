@@ -100,6 +100,7 @@ mock.module(moduleUrl("services/tags"), () => ({
 
 mock.module(moduleUrl("services/context"), () => ({
   formatContextForPrompt: async () => "",
+  selectContextMemories: (results) => results,
 }));
 
 const promptRows = [

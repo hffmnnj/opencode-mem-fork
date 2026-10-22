@@ -85,7 +85,7 @@ const fireIdleTimerFor = async (sid, captureApi) => {
 mock.module(${JSON.stringify(u("src/services/client.js"))}, () => ({
   memoryClient: { warmup: async () => {}, isReady: async () => true, close() {} },
 }));
-mock.module(${JSON.stringify(u("src/services/context.js"))}, () => ({ formatContextForPrompt: () => "" }));
+mock.module(${JSON.stringify(u("src/services/context.js"))}, () => ({ formatContextForPrompt: () => "", selectContextMemories: (results) => results }));
 mock.module(${JSON.stringify(u("src/services/privacy.js"))}, () => ({
   stripPrivateContent: (v) => v, isFullyPrivate: () => false,
 }));
