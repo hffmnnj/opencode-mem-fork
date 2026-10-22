@@ -3,7 +3,7 @@ import type { Part } from "@opencode-ai/sdk";
 import { tool } from "@opencode-ai/plugin";
 
 import { memoryClient } from "./services/client.js";
-import { formatContextForPrompt } from "./services/context.js";
+import { formatContextForPrompt, selectContextMemories } from "./services/context.js";
 import { getTags } from "./services/tags.js";
 import { stripPrivateContent, isFullyPrivate } from "./services/privacy.js";
 import { awaitCaptureDrain, performAutoCapture } from "./services/auto-capture.js";
@@ -20,7 +20,10 @@ import type { ConfigWatcherStop } from "./services/config-watcher.js";
 import { log } from "./services/logger.js";
 import type { MemoryType } from "./types/index.js";
 import { getLanguageName } from "./services/language-detector.js";
-import { filterInjectedParts } from "./services/injected-prompt-filter.js";
+import {
+  filterInjectedParts,
+  stripMemoryContextBlocks,
+} from "./services/injected-prompt-filter.js";
 import type { MemoryScope } from "./services/client.js";
 import { getHostClientConfig } from "./services/ai/opencode-host-config.js";
 import { loadOpencodeProvider } from "./services/ai/opencode-provider-loader.js";
@@ -680,7 +683,7 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
     if (!isConfigured() || !CONFIG.chatMessage.enabled) return false;
 
     const textParts = parts.filter(
-      (p): p is Part & { type: "text"; text: string } => p.type === "text"
+      (p): p is Part & { type: "text"; text: string } => p.type === "text" && p.synthetic !== true
     );
 
     if (textParts.length === 0) return false;
@@ -693,7 +696,7 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
       : textParts;
 
     if (authoredParts.length === 0) return false;
-    const userMessage = authoredParts.map((p) => p.text).join("\n");
+    const userMessage = stripMemoryContextBlocks(authoredParts.map((p) => p.text).join("\n"));
     if (!userMessage.trim()) return false;
 
     if (isStructuredSummaryPromptMessage(userMessage) || isInternalStructuredSession(sessionID)) {
@@ -714,36 +717,77 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
     return true;
   };
 
-  const loadMemoryContext = async (sessionID: string): Promise<string> => {
-    const listResult = await memoryClient.listMemories(
+  const loadMemoryContext = async (sessionID: string, prompt?: string): Promise<string> => {
+    if (CONFIG.chatMessage.maxContextChars === 0) return "";
+    let text = prompt;
+    if (text === undefined) {
+      // Reloads recover the most recent real user input, never a synthetic
+      // summary, memory block or a query invented from the session title.
+      const response = await ctx.client.session.messages({ path: { id: sessionID } });
+      const latestUser = [...(response.data || [])].reverse().find((m) => m.info.role === "user");
+      text =
+        latestUser?.parts
+          .filter((p) => p.type === "text" && p.synthetic !== true)
+          .map((p) => (p as { text: string }).text)
+          .join("\n") ?? "";
+    }
+    const parts = [{ type: "text" as const, text }];
+    const authored = CONFIG.chatMessage.filterInjectedPrompts
+      ? filterInjectedParts(parts, CONFIG.chatMessage.injectionMarkers)
+      : parts;
+    const query = stripPrivateContent(
+      stripMemoryContextBlocks(authored.map((p) => p.text).join("\n"))
+    ).trim();
+    if (!query || isStructuredSummaryPromptMessage(query)) return "";
+
+    // A wider bounded pool lets filtering/deduplication precede the final
+    // context count. Never fall back to unscored recent memories on failure.
+    const result = await memoryClient.searchMemories(
+      query.slice(0, 8000),
       tags.project.tag,
-      CONFIG.chatMessage.maxMemories
+      "project",
+      {
+        limit: Math.min(200, Math.max(32, (CONFIG.chatMessage.maxMemories ?? 3) * 8)),
+      }
     );
+    if (!result.success) return "";
+    const results = selectContextMemories(result.results, {
+      containerTag: tags.project.tag,
+      sessionID,
+      excludeCurrentSession: CONFIG.chatMessage.excludeCurrentSession ?? true,
+      maxAgeDays: CONFIG.chatMessage.maxAgeDays,
+      // Packing, rather than this eligibility pass, owns the final count.
+      maxMemories: result.results.length,
+      similarityThreshold: CONFIG.similarityThreshold,
+    });
+    return formatContextForPrompt(
+      tags.user.userEmail || null,
+      { results },
+      {
+        maxContextChars: CONFIG.chatMessage.maxContextChars,
+        maxMemories: CONFIG.chatMessage.maxMemories ?? 3,
+      }
+    );
+  };
 
-    let memories = listResult.success ? listResult.memories : [];
-
-    if (CONFIG.chatMessage.excludeCurrentSession) {
-      memories = memories.filter((m: any) => m.metadata?.sessionID !== sessionID);
+  let contextConfig = CONFIG;
+  let contextConfigRevision = 0;
+  const contextCacheKey = () => {
+    // A reload replaces CONFIG; retain no secret-bearing config values in
+    // cache keys. Selected non-secret fields also catch in-process changes.
+    if (contextConfig !== CONFIG) {
+      contextConfig = CONFIG;
+      contextConfigRevision++;
     }
-
-    if (CONFIG.chatMessage.maxAgeDays) {
-      const cutoffDate = Date.now() - CONFIG.chatMessage.maxAgeDays * 86400000;
-      memories = memories.filter((m: any) => new Date(m.createdAt).getTime() > cutoffDate);
-    }
-
-    if (memories.length === 0) return "";
-
-    const projectMemories = {
-      results: memories.map((m: any) => ({
-        similarity: 1.0,
-        memory: m.summary,
-      })),
-      total: memories.length,
-      timing: 0,
-    };
-
-    const userId = tags.user.userEmail || null;
-    return formatContextForPrompt(userId, projectMemories);
+    return JSON.stringify([
+      contextConfigRevision,
+      CONFIG.chatMessage,
+      CONFIG.similarityThreshold,
+      CONFIG.injectProfile,
+      CONFIG.storagePath,
+      CONFIG.embeddingModel,
+      CONFIG.embeddingDimensions,
+    ]);
   };
 
   return {
@@ -751,13 +795,15 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
     dispose: disposePlugin,
     // Internal V2 bridge; V1 still injects synthetic parts through chat.message.
     memoryContext: {
-      enabled: () => isConfigured() && CONFIG.chatMessage.enabled,
+      cacheKey: contextCacheKey,
+      enabled: () =>
+        isConfigured() && CONFIG.chatMessage.enabled && CONFIG.chatMessage.maxContextChars !== 0,
       refreshOnPrompt: () => CONFIG.chatMessage.injectOn === "always",
       capturePrompt: async (
         input: { sessionID: string },
         output: { message: { id: string }; parts: Part[] }
       ) => capturePrompt(input.sessionID, output.message.id, output.parts),
-      load: async (sessionID: string) => {
+      load: async (sessionID: string, query?: string) => {
         if (
           !isConfigured() ||
           !CONFIG.chatMessage.enabled ||
@@ -771,7 +817,7 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
         ) {
           return "";
         }
-        return loadMemoryContext(sessionID);
+        return loadMemoryContext(sessionID, query);
       },
     },
     config: async (cfg) => {
@@ -810,7 +856,13 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
 
         if (!shouldInject) return;
 
-        const memoryContext = await loadMemoryContext(input.sessionID);
+        const memoryContext = await loadMemoryContext(
+          input.sessionID,
+          output.parts
+            .filter((p) => p.type === "text" && p.synthetic !== true)
+            .map((p) => (p as { text: string }).text)
+            .join("\n")
+        );
 
         if (memoryContext) {
           const contextPart: Part = {
@@ -1410,15 +1462,24 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
 };
 
 function formatSearchResults(query: string, results: any, limit?: number): string {
-  const memoryResults = results.results || [];
+  const allResults = results.results || [];
+  const maxResults =
+    limit !== undefined && Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 10;
+  const memoryResults = allResults.slice(0, maxResults);
   return JSON.stringify({
     success: true,
     query,
     count: memoryResults.length,
-    results: memoryResults.slice(0, limit || 10).map((r: any) => ({
+    total: allResults.length,
+    results: memoryResults.map((r: any) => ({
       id: r.id,
       content: r.memory || r.chunk,
       similarity: Math.round(r.similarity * 100),
+      score: r.similarity,
+      scoreKind: "hybrid",
+      scoreComponents: r.scoreComponents,
+      createdAt: r.createdAt,
+      sessionId: r.sessionId,
     })),
   });
 }

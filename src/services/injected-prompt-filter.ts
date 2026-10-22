@@ -94,3 +94,25 @@ export function filterInjectedParts<T extends InjectionFilterablePart>(
 ): T[] {
   return parts.filter((part) => !isInjectedPart(part, markers));
 }
+
+/** Exclude our own reference blocks even when a host merges them into user text. */
+export function stripMemoryContextBlocks(text: string): string {
+  const tags = /<(\/?)memory_context\b[^>]*>/gi;
+  const authored: string[] = [];
+  let depth = 0;
+  let cursor = 0;
+  for (const match of text.matchAll(tags)) {
+    if (match[1] !== "/") {
+      if (depth === 0) authored.push(text.slice(cursor, match.index));
+      depth++;
+    } else if (depth > 0) {
+      depth--;
+      if (depth === 0) cursor = match.index + match[0].length;
+    } else {
+      authored.push(text.slice(cursor, match.index));
+      cursor = match.index + match[0].length;
+    }
+  }
+  if (depth === 0) authored.push(text.slice(cursor));
+  return authored.join("");
+}

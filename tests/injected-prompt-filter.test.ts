@@ -4,6 +4,7 @@ import {
   filterInjectedParts,
   getDefaultInjectionMarkers,
   isInjectedPart,
+  stripMemoryContextBlocks,
 } from "../src/services/injected-prompt-filter.js";
 import { normalizeInjectionMarkers } from "../src/config.js";
 
@@ -28,6 +29,27 @@ const INTERNAL_CONTINUATION = [
 ].join("\n");
 
 const REAL_USER_PROMPT = "Refactor the auth middleware so token refresh happens before validation.";
+
+describe("stripMemoryContextBlocks", () => {
+  it("keeps authored text around one or more merged reference blocks", () => {
+    expect(
+      stripMemoryContextBlocks(
+        "before <memory_context>old fact</memory_context> after <MEMORY_CONTEXT>more</MEMORY_CONTEXT>"
+      )
+    ).toBe("before  after ");
+  });
+  it("fails closed on an unterminated block and preserves ordinary prose", () => {
+    expect(stripMemoryContextBlocks("query <memory_context>not authored")).toBe("query ");
+    expect(stripMemoryContextBlocks(REAL_USER_PROMPT)).toBe(REAL_USER_PROMPT);
+  });
+  it("does not leak nested reference text after an inner closing tag", () => {
+    expect(
+      stripMemoryContextBlocks(
+        "before<memory_context>a<memory_context>b</memory_context>c</memory_context>after"
+      )
+    ).toBe("beforeafter");
+  });
+});
 
 describe("containsInjectionMarker", () => {
   it("detects host reminder wrappers", () => {

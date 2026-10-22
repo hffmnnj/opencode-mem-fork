@@ -162,6 +162,14 @@ interface OpenCodeMemConfig {
     maxMemories?: number;
     excludeCurrentSession?: boolean;
     maxAgeDays?: number;
+    /**
+     * Character bound on the complete rendered memory context injected
+     * into the model context (not a precise token claim). Normalized to
+     * a finite integer in 0..100000; 0 disables the injected context.
+     * Invalid non-finite values fall back to the 12000 default;
+     * negatives clamp to 0.
+     */
+    maxContextChars?: number;
     injectOn?: "first" | "always";
     filterInjectedPrompts?: boolean;
     injectionMarkers?: string[];
@@ -174,6 +182,10 @@ interface OpenCodeMemConfig {
     captureChildSessions?: boolean;
   };
 }
+
+export const CHAT_MESSAGE_MAX_CONTEXT_CHARS_DEFAULT = 12000;
+export const CHAT_MESSAGE_MAX_CONTEXT_CHARS_MIN = 0;
+export const CHAT_MESSAGE_MAX_CONTEXT_CHARS_MAX = 100000;
 
 const DEFAULTS: Required<
   Omit<
@@ -294,6 +306,7 @@ const DEFAULTS: Required<
     maxMemories: 3,
     excludeCurrentSession: true,
     maxAgeDays: undefined,
+    maxContextChars: CHAT_MESSAGE_MAX_CONTEXT_CHARS_DEFAULT,
     injectOn: "first",
     filterInjectedPrompts: true,
     injectionMarkers: [...getDefaultInjectionMarkers()],
@@ -721,6 +734,11 @@ const CONFIG_TEMPLATE = `{
 
   // Chat message capture and injection behavior
   "chatMessage": {
+    // Character bound on the complete rendered memory context (not a
+    // precise token claim). Normalized to a finite integer in 0..100000;
+    // 0 disables the injected context; invalid values fall back to 12000.
+    // "maxContextChars": 12000,
+
     // Skip prompt text injected by the host or by other OpenCode plugins
     // (system reminders, orchestration directives, background-task
     // notifications) so it is never stored as if the user had typed it.
@@ -949,6 +967,22 @@ export const OPENCODE_TIMEOUT_OUTER_MARGIN_MS = 30_000;
  */
 export function outerStructuredOutputTimeoutMs(configured: number | undefined): number {
   return (configured ?? OPENCODE_TIMEOUT_MS_DEFAULT) + OPENCODE_TIMEOUT_OUTER_MARGIN_MS;
+}
+
+/**
+ * Character bound on the rendered memory context: non-number and
+ * non-finite values (including NaN and ±Infinity) fall back to the
+ * default, fractional values are floored, and the result is clamped to
+ * 0..100000 (0 disables the injected context).
+ */
+export function normalizeChatMessageMaxContextChars(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return CHAT_MESSAGE_MAX_CONTEXT_CHARS_DEFAULT;
+  }
+  return Math.min(
+    CHAT_MESSAGE_MAX_CONTEXT_CHARS_MAX,
+    Math.max(CHAT_MESSAGE_MAX_CONTEXT_CHARS_MIN, Math.floor(value))
+  );
 }
 
 /**
@@ -1199,6 +1233,7 @@ function buildConfig(fileConfig: OpenCodeMemConfig) {
       excludeCurrentSession:
         fileConfig.chatMessage?.excludeCurrentSession ?? DEFAULTS.chatMessage.excludeCurrentSession,
       maxAgeDays: fileConfig.chatMessage?.maxAgeDays,
+      maxContextChars: normalizeChatMessageMaxContextChars(fileConfig.chatMessage?.maxContextChars),
       injectOn: (fileConfig.chatMessage?.injectOn ?? DEFAULTS.chatMessage.injectOn) as
         "first" | "always",
       filterInjectedPrompts:

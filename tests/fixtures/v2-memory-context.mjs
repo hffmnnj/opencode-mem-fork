@@ -9,6 +9,8 @@ const config = {
     excludeCurrentSession: true,
     filterInjectedPrompts: true,
   },
+  similarityThreshold: 0.58,
+  memory: { defaultScope: "project" },
   compaction: { enabled: false },
   autoCaptureEnabled: false,
   webServerEnabled: false,
@@ -21,6 +23,7 @@ let memories = [{ summary: "original project knowledge", createdAt: new Date().t
 let failLookup = false;
 let lookupCount = 0;
 const captures = [];
+const queries = [];
 const histories = new Map();
 const titles = new Map();
 mock.module(moduleUrl("config"), () => ({
@@ -32,10 +35,21 @@ mock.module(moduleUrl("services/client"), () => ({
   memoryClient: {
     warmup: async () => {},
     close: async () => {},
-    listMemories: async () => {
+    searchMemories: async (query, tag, scope, options) => {
       lookupCount++;
+      queries.push({ query, tag, scope, limit: options?.limit });
       if (failLookup) throw new Error("fixture lookup failure");
-      return { success: true, memories };
+      return {
+        success: true,
+        results: memories.map((m) => ({
+          id: m.summary,
+          memory: m.summary,
+          similarity: m.similarity ?? 0.73,
+          createdAt: new Date(m.createdAt).getTime(),
+          metadata: m.metadata,
+          containerTag: m.containerTag ?? tag,
+        })),
+      };
     },
   },
 }));
@@ -45,9 +59,18 @@ mock.module(moduleUrl("services/tags"), () => ({
     user: { userEmail: "fixture-user" },
   }),
 }));
+const { selectContextMemories, formatContextForPrompt: realFormatContext } = await import(
+  moduleUrl("services/context")
+);
+let useRealFormatter = false;
 mock.module(moduleUrl("services/context"), () => ({
-  formatContextForPrompt: async (_user, data) =>
-    "<memory_context>" + data.results.map((m) => m.memory).join("|") + "</memory_context>",
+  selectContextMemories,
+  formatContextForPrompt: async (_user, data, options) =>
+    useRealFormatter
+      ? realFormatContext(_user, data, options)
+      : data.results.length
+        ? "<memory_context>" + data.results.map((m) => m.memory).join("|") + "</memory_context>"
+        : "",
 }));
 mock.module(moduleUrl("services/user-prompt/user-prompt-manager"), () => ({
   userPromptManager: {
@@ -125,6 +148,10 @@ output.resumeCaptured = captures.length - capturesBeforeReload;
 await host.prompt("first", "authored after reload", "msg-3");
 output.afterResume = await host.context("first");
 memories = [{ summary: "other session knowledge", createdAt: new Date().toISOString() }];
+output.noHistory = await host.context("unknown");
+histories.set("other", [
+  { info: { role: "user" }, parts: [{ type: "text", text: "other project query" }] },
+]);
 output.otherSession = await host.context("other");
 output.originalSessionAfterOther = await host.context("first");
 config.chatMessage.injectOn = "always";
@@ -145,6 +172,9 @@ output.failed = await host.context("always");
 failLookup = false;
 await host.prompt("always", "retry prompt", "msg-9");
 output.retried = await host.context("always");
+config.chatMessage.maxContextChars = 0;
+output.budgetDisabled = await host.context("always");
+delete config.chatMessage.maxContextChars;
 config.chatMessage.enabled = false;
 output.disabled = await host.context("always");
 config.chatMessage.enabled = true;
@@ -177,8 +207,24 @@ memories = [
     createdAt: new Date().toISOString(),
   },
   { summary: "expired knowledge", createdAt: new Date(Date.now() - 3 * 86400000).toISOString() },
+  { summary: "below threshold", similarity: 0.2, createdAt: new Date().toISOString() },
+  { summary: "wrong scope", containerTag: "other-project", createdAt: new Date().toISOString() },
 ];
+histories.set("filtered", [
+  { info: { role: "user" }, parts: [{ type: "text", text: "filtered query" }] },
+]);
 output.filteredResume = await host.context("filtered");
+config.similarityThreshold = 0.8;
+output.stricterThreshold = await host.context("filtered");
+config.similarityThreshold = 0.58;
+output.restoredThreshold = await host.context("filtered");
+await host.prompt(
+  "mixed",
+  "<memory_context>injected text</memory_context>\nactual ranking query",
+  "msg-12"
+);
+output.mixed = await host.context("mixed");
+output.queries = queries;
 titles.set("internal", "opencode-mem capture");
 output.internalResume = await host.context("internal");
 output.captures = captures.map(([sessionID, messageID, , text]) => ({
@@ -200,6 +246,27 @@ const later = {
 };
 await plugin["chat.message"]({ sessionID: "v1" }, later);
 output.v1Later = later.parts;
+output.search = JSON.parse(
+  await plugin.tool.memory.execute({ mode: "search", query: "explicit query", limit: 1 })
+);
+output.zeroSearch = JSON.parse(
+  await plugin.tool.memory.execute({ mode: "search", query: "explicit query", limit: 0 })
+);
+useRealFormatter = true;
+config.chatMessage.maxMemories = 2;
+config.chatMessage.maxContextChars = 900;
+memories = [
+  {
+    summary: "oversized " + "x".repeat(10000),
+    similarity: 0.99,
+    createdAt: new Date().toISOString(),
+  },
+  { summary: "packing survivor alpha", similarity: 0.9, createdAt: new Date().toISOString() },
+  { summary: "packing survivor beta", similarity: 0.8, createdAt: new Date().toISOString() },
+  { summary: "packing extra gamma", similarity: 0.7, createdAt: new Date().toISOString() },
+];
+await host.prompt("packing", "pack complete memories", "msg-packing");
+output.packing = await host.context("packing");
 await host.cleanup();
 await plugin.dispose();
 console.log(JSON.stringify(output));

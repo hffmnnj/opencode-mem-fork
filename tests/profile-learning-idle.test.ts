@@ -82,7 +82,7 @@ mock.module(${JSON.stringify(configUrl)}, () => ({
 mock.module(${JSON.stringify(tagsUrl)}, () => ({
   getTags: () => ({ project: { tag: "project-tag" }, user: { userEmail: "u@example.com" } }),
 }));
-mock.module(${JSON.stringify(contextUrl)}, () => ({ formatContextForPrompt: () => "" }));
+mock.module(${JSON.stringify(contextUrl)}, () => ({ formatContextForPrompt: () => "", selectContextMemories: (results) => results }));
 mock.module(${JSON.stringify(privacyUrl)}, () => ({
   stripPrivateContent: (value) => value,
   isFullyPrivate: () => false,

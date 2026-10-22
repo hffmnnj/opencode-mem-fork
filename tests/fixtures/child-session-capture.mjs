@@ -10,6 +10,7 @@ const config = {
     filterInjectedPrompts: true,
     captureChildSessions: false,
   },
+  similarityThreshold: 0.58,
   compaction: { enabled: false },
   autoCaptureEnabled: false,
   webServerEnabled: false,
@@ -31,12 +32,15 @@ mock.module(moduleUrl("services/client"), () => ({
   memoryClient: {
     warmup: async () => {},
     close: async () => {},
-    listMemories: async () => ({
+    searchMemories: async () => ({
       success: true,
-      memories: [
+      results: [
         {
-          summary: "fixture memory",
-          createdAt: new Date().toISOString(),
+          id: "fixture-memory",
+          memory: "fixture memory",
+          similarity: 0.73,
+          containerTag: "fixture-project",
+          createdAt: Date.now(),
           metadata: {},
         },
       ],
@@ -49,7 +53,9 @@ mock.module(moduleUrl("services/tags"), () => ({
     user: { userEmail: "fixture-user" },
   }),
 }));
+const { selectContextMemories } = await import(moduleUrl("services/context"));
 mock.module(moduleUrl("services/context"), () => ({
+  selectContextMemories,
   formatContextForPrompt: async () => "fixture-memory-context",
 }));
 mock.module(moduleUrl("services/user-prompt/user-prompt-manager"), () => ({
@@ -147,13 +153,13 @@ await host.cleanup();
 childSessions.set("load-child", { parentID: "ses_parent" });
 childSessions.set("load-top", {});
 childSessions.set("load-empty-parent", { parentID: "" });
-output.loadChild = await plugin.memoryContext.load("load-child");
-output.loadTop = await plugin.memoryContext.load("load-top");
-output.loadEmptyParent = await plugin.memoryContext.load("load-empty-parent");
+output.loadChild = await plugin.memoryContext.load("load-child", "fixture query");
+output.loadTop = await plugin.memoryContext.load("load-top", "fixture query");
+output.loadEmptyParent = await plugin.memoryContext.load("load-empty-parent", "fixture query");
 
 // Opt-in: captureChildSessions true also allows load for children.
 config.chatMessage.captureChildSessions = true;
-output.loadChildOptIn = await plugin.memoryContext.load("load-child");
+output.loadChildOptIn = await plugin.memoryContext.load("load-child", "fixture query");
 
 // Opt-in: captureChildSessions true.
 childSessions.set("v1-opt", { parentID: "ses_parent" });

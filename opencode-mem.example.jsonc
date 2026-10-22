@@ -123,6 +123,11 @@
     "excludeCurrentSession": true,
     // Optional max age in days; omit for no limit:
     // "maxAgeDays": 30,
+    // Character bound on the complete rendered memory context injected into
+    // the model context (not a precise token claim). Normalized to a finite
+    // integer in 0..100000; 0 disables the injected context; invalid
+    // non-finite values fall back to 12000.
+    "maxContextChars": 12000,
     // "first" = only on the first user message in a session; "always" = every message
     "injectOn": "first",
     // Skip prompt text injected by the host or by other OpenCode plugins

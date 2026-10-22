@@ -17,6 +17,7 @@ const {
   isPlaceholderApiKey,
   normalizeAutoCleanupRetentionDays,
   normalizeAutoCaptureMaxContextBytes,
+  normalizeChatMessageMaxContextChars,
 } = await import("../src/config.js");
 
 afterAll(() => {
@@ -228,6 +229,44 @@ describe("config", () => {
 
     it("should default chatMessage.captureChildSessions to false", () => {
       expect(CONFIG.chatMessage.captureChildSessions).toBe(false);
+    });
+
+    it("should default chatMessage.maxContextChars to 12000", () => {
+      expect(CONFIG.chatMessage.maxContextChars).toBe(12000);
+    });
+  });
+
+  describe("normalizeChatMessageMaxContextChars", () => {
+    it("should fall back to the default for missing values", () => {
+      expect(normalizeChatMessageMaxContextChars(undefined)).toBe(12000);
+    });
+
+    it("should keep a configured finite value", () => {
+      expect(normalizeChatMessageMaxContextChars(4000)).toBe(4000);
+    });
+
+    it("should clamp negative values to 0 and keep an explicit 0", () => {
+      expect(normalizeChatMessageMaxContextChars(-1)).toBe(0);
+      expect(normalizeChatMessageMaxContextChars(-100000)).toBe(0);
+      expect(normalizeChatMessageMaxContextChars(0)).toBe(0);
+    });
+
+    it("should floor fractional values to an integer", () => {
+      expect(normalizeChatMessageMaxContextChars(1234.9)).toBe(1234);
+    });
+
+    it("should fall back to the default for NaN, infinities, and non-numbers", () => {
+      expect(normalizeChatMessageMaxContextChars(Number.NaN)).toBe(12000);
+      expect(normalizeChatMessageMaxContextChars(Number.POSITIVE_INFINITY)).toBe(12000);
+      expect(normalizeChatMessageMaxContextChars(Number.NEGATIVE_INFINITY)).toBe(12000);
+      expect(normalizeChatMessageMaxContextChars("4000")).toBe(12000);
+      expect(normalizeChatMessageMaxContextChars(null)).toBe(12000);
+    });
+
+    it("should clamp oversized values to 100000", () => {
+      expect(normalizeChatMessageMaxContextChars(100000)).toBe(100000);
+      expect(normalizeChatMessageMaxContextChars(100001)).toBe(100000);
+      expect(normalizeChatMessageMaxContextChars(100000.9)).toBe(100000);
     });
   });
 

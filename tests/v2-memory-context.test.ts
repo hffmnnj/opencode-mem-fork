@@ -42,12 +42,15 @@ describe("v2 memory context lifecycle", () => {
   });
 
   it("keeps session caches separate", () => {
+    expect(result.noHistory).toEqual([]);
     expect(result.otherSession).toEqual(context("other session knowledge"));
     expect(result.originalSessionAfterOther).toEqual(result.resumed);
   });
 
   it("applies current-session and age filters when restoring cold context", () => {
     expect(result.filteredResume).toEqual(context("eligible knowledge"));
+    expect(result.stricterThreshold).toEqual([]);
+    expect(result.restoredThreshold).toEqual(context("eligible knowledge"));
   });
 
   it("refreshes one context block on each always-mode user turn", () => {
@@ -63,6 +66,7 @@ describe("v2 memory context lifecycle", () => {
   });
 
   it("honors disabled and unconfigured injection", () => {
+    expect(result.budgetDisabled).toEqual([]);
     expect(result.disabled).toEqual([]);
     expect(result.unconfigured).toEqual([]);
   });
@@ -73,16 +77,51 @@ describe("v2 memory context lifecycle", () => {
     expect(result.blank).toEqual([]);
     expect(result.internalResume).toEqual([]);
     expect(result.realAfterInternal).toEqual(context("after empty lookup"));
-    expect(result.captures).toHaveLength(11);
+    expect(result.captures).toHaveLength(12);
     expect(result.captures.every((capture: any) => capture.messageID.startsWith("msg-"))).toBe(
       true
     );
     expect(result.authored).toBe("authored first prompt");
   });
 
+  it("retrieves authored project queries with a wider scored pool, not recent lists", () => {
+    expect(result.queries[0]).toEqual({
+      query: "authored first prompt",
+      tag: "fixture-project",
+      scope: "project",
+      limit: 32,
+    });
+    // First mode keeps its first-query cache until reload; the reload itself
+    // may legitimately retrieve the latest authored second prompt.
+    expect(result.firstLookups).toBe(1);
+    expect(result.queries.some((entry: any) => entry.query === "second always prompt")).toBe(true);
+    expect(result.queries.some((entry: any) => entry.query === "actual ranking query")).toBe(true);
+    expect(result.queries.every((entry: any) => !entry.query.includes("injected text"))).toBe(true);
+  });
+
   it("preserves V1 synthetic-part injection and first-turn history policy", () => {
     expect(result.v1First).toHaveLength(2);
     expect(result.v1First[0].synthetic).toBe(true);
     expect(result.v1Later).toEqual([{ type: "text", text: "later v1 prompt" }]);
+  });
+  it("exposes raw hybrid scores and reports the returned search count accurately", () => {
+    expect(result.search.count).toBe(1);
+    expect(result.search.results).toHaveLength(1);
+    expect(result.search.total).toBeGreaterThan(1);
+    expect(result.search.results[0].score).toBe(0.73);
+    expect(result.search.results[0].scoreKind).toBe("hybrid");
+    expect(result.search.results[0].similarity).toBe(73);
+    expect(result.zeroSearch.count).toBe(0);
+    expect(result.zeroSearch.results).toEqual([]);
+  });
+  it("packs later candidates through the real plugin after a top memory exceeds the budget", () => {
+    expect(result.packing).toHaveLength(1);
+    const block = result.packing[0];
+    expect(block.length).toBeLessThanOrEqual(900);
+    expect(block.match(/<memory /g)).toHaveLength(2);
+    expect(block).toContain("packing survivor alpha");
+    expect(block).toContain("packing survivor beta");
+    expect(block).not.toContain("oversized");
+    expect(block).not.toContain("packing extra gamma");
   });
 });

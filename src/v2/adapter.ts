@@ -8,11 +8,13 @@ import { eventBelongsToLocation, legacyToolResult, toLegacyEvent } from "./legac
 interface MemoryContextHooks {
   enabled(): boolean;
   refreshOnPrompt(): boolean;
+  /** Opaque, non-secret retrieval configuration identity; never persisted. */
+  cacheKey?(): string;
   capturePrompt(
     input: { sessionID: string },
     output: { message: { id: string }; parts: any[] }
   ): Promise<boolean>;
-  load(sessionID: string): Promise<string>;
+  load(sessionID: string, query?: string): Promise<string>;
 }
 
 const memoryInput = {
@@ -55,6 +57,17 @@ export async function registerV2Adapter(ctx: Context, legacy: any) {
   const messageIDs = new Map<string, string>();
   const suppressed = new Set<string>();
   const memoryContext = legacy.memoryContext as MemoryContextHooks | undefined;
+  let configurationKey = memoryContext?.cacheKey?.();
+  let contextGeneration = 0;
+  function synchronizeContextConfiguration(): number {
+    const nextKey = memoryContext?.cacheKey?.();
+    if (nextKey !== configurationKey) {
+      contexts.clear();
+      configurationKey = nextKey;
+      contextGeneration++;
+    }
+    return contextGeneration;
+  }
   /** Skill IDs last registered from opencode-mem DB (so we can remove stale ones). */
   const registeredSkillIds = new Set<string>();
 
@@ -146,25 +159,38 @@ export async function registerV2Adapter(ctx: Context, legacy: any) {
   });
 
   await ctx.session.hook("prompt", async (event) => {
+    synchronizeContextConfiguration();
     messageIDs.set(event.sessionID, event.messageID);
     const original = { type: "text", text: event.prompt.text };
     const output = { message: { id: event.messageID }, parts: [original] };
 
     if (memoryContext) {
       try {
-        if (!(await memoryContext.capturePrompt({ sessionID: event.sessionID }, output))) {
+        const captured = await memoryContext.capturePrompt({ sessionID: event.sessionID }, output);
+        // Prompt admission can overlap; only the newest admission may change
+        // suppression or replace its query-derived context.
+        if (messageIDs.get(event.sessionID) !== event.messageID) return;
+        if (!captured) {
           suppressed.add(event.sessionID);
           return;
         }
         suppressed.delete(event.sessionID);
+        const generation = synchronizeContextConfiguration();
         // In V1, the first injected part remains in history. V2 system parts
         // exist only for one request, so retain that context across user turns.
         if (memoryContext.refreshOnPrompt()) contexts.delete(event.sessionID);
         if (!contexts.has(event.sessionID)) {
-          contexts.set(event.sessionID, await memoryContext.load(event.sessionID));
+          const context = await memoryContext.load(event.sessionID, original.text);
+          if (
+            synchronizeContextConfiguration() === generation &&
+            memoryContext.enabled() &&
+            messageIDs.get(event.sessionID) === event.messageID
+          ) {
+            contexts.set(event.sessionID, context);
+          }
         }
       } catch (error) {
-        contexts.delete(event.sessionID);
+        if (messageIDs.get(event.sessionID) === event.messageID) contexts.delete(event.sessionID);
         log("V2 prompt memory context failed", { error: String(error) });
       }
       return;
@@ -182,6 +208,7 @@ export async function registerV2Adapter(ctx: Context, legacy: any) {
   });
 
   await ctx.session.hook("context", async (event) => {
+    const generation = synchronizeContextConfiguration();
     if (memoryContext) {
       if (!memoryContext.enabled()) {
         contexts.clear();
@@ -189,7 +216,17 @@ export async function registerV2Adapter(ctx: Context, legacy: any) {
         try {
           // Rehydrate from the canonical memory store, without replaying the
           // prompt hook or persisting a second plaintext copy in host storage.
-          contexts.set(event.sessionID, await memoryContext.load(event.sessionID));
+          const messageID = messageIDs.get(event.sessionID);
+          const context = await memoryContext.load(event.sessionID);
+          if (
+            synchronizeContextConfiguration() === generation &&
+            memoryContext.enabled() &&
+            messageIDs.get(event.sessionID) === messageID &&
+            !suppressed.has(event.sessionID) &&
+            !contexts.has(event.sessionID)
+          ) {
+            contexts.set(event.sessionID, context);
+          }
         } catch (error) {
           log("V2 restored memory context failed", { error: String(error) });
         }

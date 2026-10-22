@@ -2,6 +2,52 @@ import { describe, expect, it } from "bun:test";
 import { registerV2Adapter } from "../src/v2/adapter.js";
 
 describe("OpenCode v2 plugin adapter", () => {
+  it("does not let a late older capture unsuppress a newer injected-only prompt", async () => {
+    const hooks = new Map<string, (event: any) => Promise<void>>();
+    let release!: (value: boolean) => void;
+    const olderCapture = new Promise<boolean>((resolve) => {
+      release = resolve;
+    });
+    const cleanup = await registerV2Adapter(
+      {
+        location: { directory: "/workspace/project" },
+        tool: { transform: async () => {} },
+        session: {
+          hook: async (name: string, callback: (event: any) => Promise<void>) => {
+            hooks.set(name, callback);
+          },
+        },
+      } as any,
+      {
+        tool: { memory: { description: "memory" } },
+        memoryContext: {
+          enabled: () => true,
+          refreshOnPrompt: () => true,
+          capturePrompt: async (_input: any, output: any) =>
+            output.message.id === "older" ? olderCapture : output.message.id !== "injected",
+          load: async () => "authored context",
+        },
+      }
+    );
+    const prompt = (id: string) =>
+      hooks.get("prompt")!({ sessionID: "session", messageID: id, prompt: { text: id } });
+    const context = async () => {
+      const event = { sessionID: "session", model: {}, system: [] };
+      await hooks.get("context")!(event);
+      return event.system;
+    };
+    try {
+      const older = prompt("older");
+      await prompt("injected");
+      release(true);
+      await older;
+      expect(await context()).toEqual([]);
+      await prompt("real");
+      expect(await context()).toEqual([{ type: "text", text: "authored context" }]);
+    } finally {
+      await cleanup();
+    }
+  });
   it("invalidates the compacted session's cache only for events at this location", async () => {
     const hooks = new Map<string, (event: any) => Promise<void>>();
     let nextEvent!: (event: any) => void;

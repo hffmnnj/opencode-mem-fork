@@ -240,9 +240,50 @@ These settings live under the `chatMessage` key in `~/.config/opencode/opencode-
 | `enabled`                                              | `true`           | Capture authored user prompts and inject memory context.                                                                                                                                                                                                                                               |
 | `injectOn`                                             | `"first"`        | Inject memory context on the first user message of a session, or on `"always"` every authored turn.                                                                                                                                                                                                    |
 | `maxMemories` / `excludeCurrentSession` / `maxAgeDays` | `3` / `true` / — | How many memories the injected context holds, whether memories captured in the current session are excluded, and an optional age cutoff in days.                                                                                                                                                       |
+| `maxContextChars`                                      | `12000`          | Character bound on the complete rendered memory context (not a precise token claim). Normalized to a finite integer in `0..100000`; `0` disables the injected context; invalid non-finite values fall back to the default.                                                                             |
 | `filterInjectedPrompts`                                | `true`           | Skip prompt text injected by the host or by other OpenCode plugins (system reminders, orchestration directives, background-task notifications) so it is never stored as if the user had typed it.                                                                                                      |
 | `injectionMarkers`                                     | built-ins        | Extra markers identifying injected blocks; added to the built-in list, never replacing it.                                                                                                                                                                                                             |
 | `captureChildSessions`                                 | `false`          | Capture prompts from orchestrator child sessions (sessions with a `parentID`, e.g. OpenCode task/subagent children). Their "user" messages are written by the parent agent, not by you, so by default they are not stored, auto-captured, used for profile learning, or given injected memory context. |
+
+The injected block is bounded by `maxContextChars`: the complete rendered
+memory context fits within that many characters (`0` disables
+injection). This is a character bound, not a precise token claim — it limits
+how much rendered text reaches the model, not a counted token budget. Whole
+memories that do not fit are skipped; only the optional profile may be
+truncated, with an explicit marker.
+The final `maxMemories` limit counts only successfully packed entries, so an
+oversized top result does not prevent smaller lower-ranked results from filling it.
+
+With `injectOn: "first"` (the default), the context retrieved for the
+session's first query is retained across user turns and model steps; with
+`"always"`, it is refreshed on each authored user prompt (see
+[Automatic memory context](#automatic-memory-context-on-opencode-v2)).
+Retrieval/configuration changes invalidate the V2 cache even between model
+steps. Results from older in-flight loads are not allowed to restore stale context.
+
+Retrieval for injection is query-driven within the current project: the
+authored prompt is searched against project memories, and candidates are
+ranked by their actual hybrid search score — not a confidence label —
+against the configured `similarityThreshold`. Memories captured in the
+current session are excluded when `excludeCurrentSession` is true, and
+`maxAgeDays` requires a date newer than the cutoff. Exact duplicate IDs and
+content (after Unicode, case and whitespace normalization) are collapsed.
+Each rendered entry keeps its ID, date and source session when available, and untrusted memory
+content is escaped before rendering so stored text cannot break out of the
+injected block. The existing calibrated thresholds keep their defaults;
+setting `maxContextChars` does not replace them.
+
+Explicit `memory` searches also return the raw `score`, `scoreKind: "hybrid"`
+and component scores when available. The legacy integer `similarity` field
+remains on a 0–100 scale for compatibility; it is not a confidence percentage.
+`count` is the number actually returned after the requested limit, and `total`
+is the number in the retrieved pool before that limit, not an exhaustive corpus count.
+
+Lexical matching normalizes Unicode to NFC and recognizes Unicode letter/mark/number
+boundaries. Full identifiers and paths remain searchable, with camelCase/acronym
+components also recognized (`getHTTPResponse` → `get`, `http`, `response`). This is
+not stemming or linguistic word segmentation; undelimited CJK text is not split
+into words, and the existing short-token rule remains.
 
 ### Choosing / configuring embeddings
 

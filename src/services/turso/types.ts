@@ -34,6 +34,10 @@ export interface SearchResult {
   id: string;
   memory: string;
   similarity: number;
+  /** Hybrid retrieval score components, not calibrated confidence probabilities. */
+  scoreComponents?: { content: number; tags: number; keyword: number };
+  containerTag?: string;
+  sessionId?: string;
   createdAt?: number;
   tags?: string[];
   metadata?: Record<string, unknown>;

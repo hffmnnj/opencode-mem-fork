@@ -110,8 +110,14 @@ export class LocalMemoryClient {
     this.reset();
   }
 
-  async searchMemories(query: string, containerTag: string, scope: MemoryScope = "project") {
+  async searchMemories(
+    query: string,
+    containerTag: string,
+    scope: MemoryScope = "project",
+    options: { limit?: number } = {}
+  ) {
     try {
+      if (!query.trim()) return { success: true as const, results: [], total: 0, timing: 0 };
       await this.initialize();
 
       const queryVector = await embeddingService.embedWithTimeout(query, { task: "query" });
@@ -130,7 +136,9 @@ export class LocalMemoryClient {
         shards,
         queryVector,
         scope === "all-projects" ? "" : containerTag,
-        CONFIG.maxMemories,
+        Number.isFinite(options.limit)
+          ? Math.max(0, Math.min(200, Math.floor(options.limit!)))
+          : CONFIG.maxMemories,
         CONFIG.similarityThreshold,
         query
       );
