@@ -1,0 +1,185 @@
+{
+  "version": "retrieval-coding-facts-v1",
+  "notes": "Public synthetic coding facts about this repo's own retrieval conventions. Labels are authored expectations, independent of any measured scores. No production memory content.",
+  "documents": [
+    {
+      "id": "fact-bun-test",
+      "content": "Run the TypeScript test suite with bun test from the repo root after installing dependencies with bun install.",
+      "tags": ["bun", "testing", "typescript"],
+      "createdAt": 1700000001000
+    },
+    {
+      "id": "fact-hybrid-blend",
+      "content": "Hybrid ranking blends content cosine similarity at weight 0.5, tag similarity at 0.3, and lexical coverage at 0.2; queries without terms fall back to 0.6 content plus 0.4 tags.",
+      "tags": ["retrieval", "hybrid-search", "ranking"],
+      "createdAt": 1700000002000
+    },
+    {
+      "id": "fact-cosine-clamp",
+      "content": "Cosine distance converts to a similarity score as 1 minus the distance, clamped to the 0 to 1 range to absorb float artifacts near exact matches.",
+      "tags": ["cosine-similarity", "scoring", "embeddings"],
+      "createdAt": 1700000003000
+    },
+    {
+      "id": "fact-tag-format",
+      "content": "Tag vectors embed the canonical Topics string, for example Topics: bun, testing, so that write paths and read paths stay aligned.",
+      "tags": ["tags", "embeddings", "indexing"],
+      "createdAt": 1700000004000
+    },
+    {
+      "id": "fact-tokenizer",
+      "content": "The query tokenizer keeps dotted identifiers and file paths such as src/services/turso/vector-search.ts as single terms before splitting them into components.",
+      "tags": ["tokenizer", "lexical-search", "code-symbols"],
+      "createdAt": 1700000005000
+    },
+    {
+      "id": "fact-threshold",
+      "content": "Search results are filtered at the configured similarity threshold before the top slice is returned to the caller.",
+      "tags": ["threshold", "search", "ranking"],
+      "createdAt": 1700000006000
+    },
+    {
+      "id": "fact-shard-overfetch",
+      "content": "Each shard scan over-fetches max(limit times 2, 32) candidates so content, tag, and keyword matches can merge before the hybrid re-rank.",
+      "tags": ["sharding", "ranking", "performance"],
+      "createdAt": 1700000007000
+    },
+    {
+      "id": "fact-bun-run",
+      "content": "Use bunx to run a one-off binary without installing it, and prefer bun over npm or npx for scripts in this repo.",
+      "tags": ["bun", "tooling", "scripts"],
+      "createdAt": 1700000008000
+    },
+    {
+      "id": "fact-list-order",
+      "content": "Plain listing returns pinned memories first, then newest created_at first, with no relevance ranking applied.",
+      "tags": ["listing", "recency", "pinning"],
+      "createdAt": 1700000009000
+    },
+    {
+      "id": "fact-boundary-match",
+      "content": "Token boundary matching requires non-alphanumeric boundaries, so searching for user matches settings text but in never matches index.",
+      "tags": ["lexical-search", "matching", "tokenizer"],
+      "createdAt": 1700000010000
+    },
+    {
+      "id": "fact-remote-embed",
+      "content": "Remote embeddings use an OpenAI-compatible POST to the embeddings endpoint with bearer auth, retries on rate limits and server errors, and a per-attempt timeout.",
+      "tags": ["embeddings", "remote-gpu", "api"],
+      "createdAt": 1700000011000
+    },
+    {
+      "id": "fact-keyword-recall",
+      "content": "Keyword recall projects id, content, tags, and created_at, then scores every row with boundary-aware coverage before applying the limit.",
+      "tags": ["lexical-search", "recall", "performance"],
+      "createdAt": 1700000012000
+    }
+  ],
+  "queries": [
+    {
+      "id": "q-exact-path",
+      "text": "src/services/turso/vector-search.ts",
+      "relevantIds": ["fact-tokenizer"],
+      "answerable": true,
+      "kind": "exact-symbol"
+    },
+    {
+      "id": "q-exact-threshold",
+      "text": "similarityThreshold",
+      "relevantIds": ["fact-threshold"],
+      "answerable": true,
+      "kind": "exact-symbol"
+    },
+    {
+      "id": "q-exact-bun",
+      "text": "bun test",
+      "relevantIds": ["fact-bun-test"],
+      "answerable": true,
+      "kind": "exact-symbol"
+    },
+    {
+      "id": "q-exact-topics",
+      "text": "Topics: bun, testing",
+      "relevantIds": ["fact-tag-format"],
+      "answerable": true,
+      "kind": "exact-symbol"
+    },
+    {
+      "id": "q-para-blend",
+      "text": "how are content, tag, and keyword scores weighted when ranking results?",
+      "relevantIds": ["fact-hybrid-blend"],
+      "answerable": true,
+      "kind": "paraphrase"
+    },
+    {
+      "id": "q-para-cosine",
+      "text": "how is a vector distance turned into a similarity score?",
+      "relevantIds": ["fact-cosine-clamp"],
+      "answerable": true,
+      "kind": "paraphrase"
+    },
+    {
+      "id": "q-para-shard",
+      "text": "how many candidates does each shard fetch before reranking?",
+      "relevantIds": ["fact-shard-overfetch"],
+      "answerable": true,
+      "kind": "paraphrase"
+    },
+    {
+      "id": "q-para-remote",
+      "text": "how do remote embedding requests authenticate and retry?",
+      "relevantIds": ["fact-remote-embed"],
+      "answerable": true,
+      "kind": "paraphrase"
+    },
+    {
+      "id": "q-para-boundary",
+      "text": "why does searching for in not match the word index?",
+      "relevantIds": ["fact-boundary-match"],
+      "answerable": true,
+      "kind": "paraphrase"
+    },
+    {
+      "id": "q-code-sql",
+      "text": "ORDER BY is_pinned DESC, created_at DESC",
+      "relevantIds": ["fact-list-order"],
+      "answerable": true,
+      "kind": "code-variant"
+    },
+    {
+      "id": "q-fr-install",
+      "text": "Comment installer les dépendances du projet ?",
+      "relevantIds": ["fact-bun-test"],
+      "answerable": true,
+      "kind": "multilingual"
+    },
+    {
+      "id": "q-de-threshold",
+      "text": "Welcher Schwellenwert filtert die Suchergebnisse?",
+      "relevantIds": ["fact-threshold"],
+      "answerable": true,
+      "kind": "multilingual"
+    },
+    {
+      "id": "q-none-recipe",
+      "text": "What is the best recipe for sourdough bread?",
+      "relevantIds": [],
+      "answerable": false,
+      "kind": "no-answer"
+    },
+    {
+      "id": "q-none-quantum",
+      "text": "Explain quantum error correction with surface codes",
+      "relevantIds": [],
+      "answerable": false,
+      "kind": "no-answer"
+    },
+    {
+      "id": "q-none-vacation",
+      "text": "What is the vacation policy for contractors?",
+      "relevantIds": [],
+      "answerable": false,
+      "kind": "no-answer"
+    }
+  ]
+}
