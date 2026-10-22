@@ -39,13 +39,23 @@ async function host(load: (sessionID: string, query?: string) => Promise<string>
     prompt: (messageID: string) =>
       hooks.get("prompt")!({ sessionID: "session", messageID, prompt: { text: messageID } }),
     context: async () => {
-      const event = {
+      const event: any = {
         sessionID: "session",
         model: {},
         system: [] as Array<{ type: string; text: string }>,
+        messages: [] as any[],
       };
       await hooks.get("context")!(event);
-      return event.system.map((part) => part.text);
+      // The fixed system prefix never carries memory; the tail does.
+      expect(event.system).toEqual([]);
+      return (event.messages as any[]).map((message) =>
+        Array.isArray(message?.content)
+          ? message.content
+              .filter((part: any) => part?.type === "text")
+              .map((part: any) => part.text)
+              .join("\n")
+          : message?.text
+      );
     },
   };
 }

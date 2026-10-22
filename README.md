@@ -99,8 +99,10 @@ With `@latest` (or a semver range) and `autoUpdate: true` in `opencode-mem.jsonc
 
 ### Automatic memory context on OpenCode v2
 
-The v2 plugin supplies automatic memory context through the model's system context.
-These blocks are not added to the authored user prompt or stored in the chat transcript.
+The v2 plugin supplies automatic memory context as quoted data at the outgoing
+conversation tail, outside the fixed system prefix. These transient blocks are
+not added to the authored user prompt or stored in the chat transcript. Memory
+and profile updates therefore do not replace the historical prompt prefix.
 With `chatMessage.injectOn: "first"` (the default), the session's initial context is
 retained across user turns and model steps. With `"always"`, it is refreshed on each
 authored user turn.

@@ -9,6 +9,7 @@
         "@libsql/client": "^0.18.0",
         "@opencode-ai/plugin": "^1.19.0",
         "@opencode-ai/sdk": "^1.19.0",
+        "@opencode/ai": "2.0.31",
         "@opencode/plugin": "^2.0.27",
         "@tursodatabase/database": "^0.8.3",
         "franc-min": "^6.2.0",

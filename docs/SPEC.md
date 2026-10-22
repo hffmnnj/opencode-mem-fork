@@ -1,5 +1,19 @@
 # Query-driven memory, phase 1
 
+## Cache-stable memory follow-up
+
+Goal: retain query-driven recall, profiles, first/always refresh, suppression, live configuration and compaction behavior while keeping changing memory data outside the fixed system prefix.
+
+Not doing: no feature removal, retrieval/ranking change, new persistence, production-memory rewrite, auth change, or OpenCode restart.
+
+Acceptance checks:
+
+1. The complete existing quoted memory payload remains available at the outgoing conversation tail rather than the system prefix.
+2. Memory refresh, suppression and reload can change tail data without changing existing system or historical messages.
+3. Existing first/always, child/internal/injected-prompt guards, configuration invalidation and race protections remain effective.
+4. Repeated construction does not accumulate duplicate blocks; native message classes and tool/result adjacency remain valid.
+5. Focused tests, typecheck and non-destructive runtime compilation pass without model calls.
+
 ## Phase 2: packing, query matching and measurement
 
 Goal: spend the context budget on useful complete memories, recognize multilingual and code-symbol queries, respect live configuration changes, and measure retrieval with the configured real embedding service.
