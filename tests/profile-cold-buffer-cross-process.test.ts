@@ -25,6 +25,7 @@ import { tursoConnectionManager } from "../src/services/turso/connection-manager
 let tmpDir: string;
 let coldBufferFile: string;
 const extraDirs: string[] = [];
+let restoreConfig: () => void = () => {};
 
 async function makeManager(dir: string = tmpDir) {
   const { CONFIG } = await import("../src/config.js");
@@ -59,12 +60,17 @@ async function coldPush(mgr: any, profileId: string, description: string) {
 }
 
 describe("cold buffer cross-process safety", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    const { CONFIG } = await import("../src/config.js");
+    const previous = { ...CONFIG };
+    // makeManager disables providers; do not leak that state into later files.
+    restoreConfig = () => Object.assign(CONFIG, previous);
     tmpDir = mkdtempSync(join(tmpdir(), "opencode-mem-coldbuf-xproc-"));
     coldBufferFile = join(tmpDir, "cold-buffer.json");
   });
 
   afterEach(async () => {
+    restoreConfig();
     await tursoConnectionManager.closeAll();
     await new Promise((r) => setTimeout(r, 50));
     // Restore permissions first in case a failure left a read-only dir behind.
