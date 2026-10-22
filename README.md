@@ -251,11 +251,15 @@ injection). This is a character bound, not a precise token claim — it limits
 how much rendered text reaches the model, not a counted token budget. Whole
 memories that do not fit are skipped; only the optional profile may be
 truncated, with an explicit marker.
+The final `maxMemories` limit counts only successfully packed entries, so an
+oversized top result does not prevent smaller lower-ranked results from filling it.
 
 With `injectOn: "first"` (the default), the context retrieved for the
 session's first query is retained across user turns and model steps; with
 `"always"`, it is refreshed on each authored user prompt (see
 [Automatic memory context](#automatic-memory-context-on-opencode-v2)).
+Retrieval/configuration changes invalidate the V2 cache even between model
+steps. Results from older in-flight loads are not allowed to restore stale context.
 
 Retrieval for injection is query-driven within the current project: the
 authored prompt is searched against project memories, and candidates are
@@ -274,6 +278,12 @@ and component scores when available. The legacy integer `similarity` field
 remains on a 0–100 scale for compatibility; it is not a confidence percentage.
 `count` is the number actually returned after the requested limit, and `total`
 is the number in the retrieved pool before that limit, not an exhaustive corpus count.
+
+Lexical matching normalizes Unicode to NFC and recognizes Unicode letter/mark/number
+boundaries. Full identifiers and paths remain searchable, with camelCase/acronym
+components also recognized (`getHTTPResponse` → `get`, `http`, `response`). This is
+not stemming or linguistic word segmentation; undelimited CJK text is not split
+into words, and the existing short-token rule remains.
 
 ### Choosing / configuring embeddings
 

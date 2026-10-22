@@ -400,6 +400,143 @@ describe("formatContextForPrompt", () => {
     expect(output).toBe("");
   });
 
+  it("packs the final count from later candidates when the top-ranked memory is oversized", async () => {
+    const big = `BIG-${"x".repeat(5000)}`;
+    const pool = [
+      makeMemory({ id: "big", memory: big, similarity: 0.95 }),
+      makeMemory({ id: "a-weak", memory: "  ALPHA survivor  ", similarity: 0.6 }),
+      makeMemory({ id: "a", memory: "alpha survivor", similarity: 0.9 }),
+      makeMemory({ id: "b", memory: "beta survivor", similarity: 0.85 }),
+      makeMemory({ id: "c", memory: "gamma survivor", similarity: 0.8 }),
+      makeMemory({ id: "weak", memory: "unrelated weak", similarity: 0.1 }),
+      makeMemory({
+        id: "foreign",
+        memory: "foreign scope",
+        similarity: 0.99,
+        containerTag: "other",
+      }),
+    ];
+    const selected = selectContextMemories(pool, makeOptions({ maxMemories: 10 }));
+    expect(selected.map((m) => m.id)).toEqual(["big", "a", "b", "c"]);
+    const threeSmalls = await formatContextForPrompt(null, {
+      results: selected.filter((m) => m.id !== "big"),
+    });
+    const budget = threeSmalls.length;
+    const output = await formatContextForPrompt(
+      null,
+      { results: selected },
+      { maxContextChars: budget, maxMemories: 2 }
+    );
+    expect(output.match(/<\/memory>/g)).toHaveLength(2);
+    expect(output).toContain("alpha survivor");
+    expect(output).toContain("beta survivor");
+    expect(output).not.toContain("BIG-");
+    expect(output).not.toContain("gamma survivor");
+    expect(output).not.toContain("unrelated weak");
+    expect(output).not.toContain("foreign scope");
+    expect(output.indexOf("alpha survivor")).toBeLessThan(output.indexOf("beta survivor"));
+    expect(output.length).toBeLessThanOrEqual(budget);
+  });
+
+  it("keeps complete budget accounting with escaping, wrappers, and profile under a final count", async () => {
+    CONFIG.injectProfile = true;
+    mockProfile = "Prefers concise answers";
+    const budget = 2000;
+    const output = await formatContextForPrompt(
+      "user-1",
+      {
+        results: [
+          { similarity: 0.95, memory: `BIG-${"x".repeat(5000)}`, id: "big" },
+          { similarity: 0.9, memory: "alpha & <tag> fact", id: "a" },
+          { similarity: 0.85, memory: "beta fact", id: "b" },
+          { similarity: 0.8, memory: "gamma fact", id: "c" },
+        ],
+      },
+      { maxContextChars: budget, maxMemories: 2 }
+    );
+    expect(output.length).toBeLessThanOrEqual(budget);
+    expect(output.startsWith("<memory_context>")).toBe(true);
+    expect(output.endsWith("</memory_context>")).toBe(true);
+    expect(output).toContain("<project_knowledge>");
+    expect(output).toContain("<user_profile>");
+    expect(output).toContain("Prefers concise answers");
+    expect(output).toContain("alpha &amp; &lt;tag&gt; fact");
+    expect(output).toContain("beta fact");
+    expect(output).not.toContain("BIG-");
+    expect(output).not.toContain("gamma fact");
+    expect(output.match(/<\/memory>/g)).toHaveLength(2);
+  });
+
+  it("packs no memories but keeps a configured profile when the final count is zero", async () => {
+    CONFIG.injectProfile = true;
+    mockProfile = "Prefers concise answers";
+    const output = await formatContextForPrompt(
+      "user-1",
+      {
+        results: [
+          { similarity: 0.9, memory: "alpha fact", id: "a" },
+          { similarity: 0.8, memory: "beta fact", id: "b" },
+        ],
+      },
+      { maxContextChars: 5000, maxMemories: 0 }
+    );
+    expect(output).toContain("<user_profile>");
+    expect(output).toContain("Prefers concise answers");
+    expect(output).not.toContain("<project_knowledge>");
+    expect(output).not.toContain("alpha fact");
+    expect(output.match(/<\/memory>/g)).toBeNull();
+    const anonymous = await formatContextForPrompt(
+      null,
+      {
+        results: [{ similarity: 0.9, memory: "alpha fact", id: "a" }],
+      },
+      { maxContextChars: 5000, maxMemories: 0 }
+    );
+    expect(anonymous).toBe("");
+  });
+
+  it("clamps fractional and invalid final counts", async () => {
+    const results = {
+      results: [
+        { similarity: 0.9, memory: "alpha fact", id: "a" },
+        { similarity: 0.8, memory: "beta fact", id: "b" },
+      ],
+    };
+    const fractional = await formatContextForPrompt(null, results, {
+      maxContextChars: 5000,
+      maxMemories: 1.9,
+    });
+    expect(fractional.match(/<\/memory>/g)).toHaveLength(1);
+    expect(fractional).toContain("alpha fact");
+    expect(fractional).not.toContain("beta fact");
+
+    CONFIG.injectProfile = true;
+    mockProfile = "Prefers concise answers";
+    for (const limit of [-3, NaN, Infinity, -Infinity]) {
+      const output = await formatContextForPrompt("user-1", results, {
+        maxContextChars: 5000,
+        maxMemories: limit,
+      });
+      expect(output).toContain("Prefers concise answers");
+      expect(output).not.toContain("alpha fact");
+      expect(output.match(/<\/memory>/g)).toBeNull();
+    }
+  });
+
+  it("packs every fitting memory when the final count is omitted", async () => {
+    const output = await formatContextForPrompt(null, {
+      results: [
+        { similarity: 0.9, memory: "alpha fact", id: "a" },
+        { similarity: 0.8, memory: "beta fact", id: "b" },
+        { similarity: 0.7, memory: "gamma fact", id: "c" },
+      ],
+    });
+    expect(output.match(/<\/memory>/g)).toHaveLength(3);
+    expect(output).toContain("alpha fact");
+    expect(output).toContain("beta fact");
+    expect(output).toContain("gamma fact");
+  });
+
   it("defaults to a 12000 character budget", () => {
     expect(DEFAULT_MAX_CONTEXT_CHARS).toBe(12000);
   });

@@ -756,7 +756,8 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
       sessionID,
       excludeCurrentSession: CONFIG.chatMessage.excludeCurrentSession ?? true,
       maxAgeDays: CONFIG.chatMessage.maxAgeDays,
-      maxMemories: CONFIG.chatMessage.maxMemories ?? 3,
+      // Packing, rather than this eligibility pass, owns the final count.
+      maxMemories: result.results.length,
       similarityThreshold: CONFIG.similarityThreshold,
     });
     return formatContextForPrompt(
@@ -764,8 +765,29 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
       { results },
       {
         maxContextChars: CONFIG.chatMessage.maxContextChars,
+        maxMemories: CONFIG.chatMessage.maxMemories ?? 3,
       }
     );
+  };
+
+  let contextConfig = CONFIG;
+  let contextConfigRevision = 0;
+  const contextCacheKey = () => {
+    // A reload replaces CONFIG; retain no secret-bearing config values in
+    // cache keys. Selected non-secret fields also catch in-process changes.
+    if (contextConfig !== CONFIG) {
+      contextConfig = CONFIG;
+      contextConfigRevision++;
+    }
+    return JSON.stringify([
+      contextConfigRevision,
+      CONFIG.chatMessage,
+      CONFIG.similarityThreshold,
+      CONFIG.injectProfile,
+      CONFIG.storagePath,
+      CONFIG.embeddingModel,
+      CONFIG.embeddingDimensions,
+    ]);
   };
 
   return {
@@ -773,6 +795,7 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
     dispose: disposePlugin,
     // Internal V2 bridge; V1 still injects synthetic parts through chat.message.
     memoryContext: {
+      cacheKey: contextCacheKey,
       enabled: () =>
         isConfigured() && CONFIG.chatMessage.enabled && CONFIG.chatMessage.maxContextChars !== 0,
       refreshOnPrompt: () => CONFIG.chatMessage.injectOn === "always",

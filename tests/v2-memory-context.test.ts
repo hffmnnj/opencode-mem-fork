@@ -49,6 +49,8 @@ describe("v2 memory context lifecycle", () => {
 
   it("applies current-session and age filters when restoring cold context", () => {
     expect(result.filteredResume).toEqual(context("eligible knowledge"));
+    expect(result.stricterThreshold).toEqual([]);
+    expect(result.restoredThreshold).toEqual(context("eligible knowledge"));
   });
 
   it("refreshes one context block on each always-mode user turn", () => {
@@ -111,5 +113,15 @@ describe("v2 memory context lifecycle", () => {
     expect(result.search.results[0].similarity).toBe(73);
     expect(result.zeroSearch.count).toBe(0);
     expect(result.zeroSearch.results).toEqual([]);
+  });
+  it("packs later candidates through the real plugin after a top memory exceeds the budget", () => {
+    expect(result.packing).toHaveLength(1);
+    const block = result.packing[0];
+    expect(block.length).toBeLessThanOrEqual(900);
+    expect(block.match(/<memory /g)).toHaveLength(2);
+    expect(block).toContain("packing survivor alpha");
+    expect(block).toContain("packing survivor beta");
+    expect(block).not.toContain("oversized");
+    expect(block).not.toContain("packing extra gamma");
   });
 });

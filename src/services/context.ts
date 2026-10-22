@@ -19,6 +19,12 @@ interface MemoriesResponseMinimal {
 export interface FormatContextOptions {
   /** Maximum length in characters of the complete returned block. */
   maxContextChars?: number;
+  /**
+   * Maximum number of memory entries to pack. The cap applies to
+   * successfully fitted memories only: oversized entries are skipped
+   * without consuming the count. Omitted means no extra cap.
+   */
+  maxMemories?: number;
 }
 
 export interface SelectContextMemoriesOptions {
@@ -199,6 +205,13 @@ export async function formatContextForPrompt(
   const maxChars = options.maxContextChars ?? DEFAULT_MAX_CONTEXT_CHARS;
   if (!Number.isFinite(maxChars) || maxChars <= 0) return "";
   const budget = Math.floor(maxChars);
+  let maxMemories: number;
+  if (options.maxMemories === undefined) {
+    maxMemories = Number.POSITIVE_INFINITY;
+  } else {
+    const floored = Math.floor(options.maxMemories);
+    maxMemories = Number.isFinite(floored) ? Math.max(0, floored) : 0;
+  }
 
   let profileText: string | null = null;
   if (CONFIG.injectProfile && userId) {
@@ -218,6 +231,7 @@ export async function formatContextForPrompt(
 
   const fittedMemories: string[] = [];
   for (const block of memoryBlocks) {
+    if (fittedMemories.length >= maxMemories) break;
     const probe = wrapKnowledge([...fittedMemories, block]);
     if (assembleBlock([probe]).length <= budget) fittedMemories.push(block);
   }

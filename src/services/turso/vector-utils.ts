@@ -73,15 +73,64 @@ export function formatTagsForEmbedding(tags: string[]): string {
 /** Maximum bounded query terms kept for lexical retrieval. */
 export const MAX_QUERY_TERMS = 16;
 
+/** Canonicalize lexical text: NFC normalization then lowercase (shared query/haystack/needle). */
+function canonicalizeLexicalText(value: string): string {
+  return value.normalize("NFC").toLowerCase();
+}
+
+/**
+ * True for Unicode word characters (letters, marks, numbers).
+ * Separators such as `_ - . /`, whitespace, punctuation, and emoji are boundaries.
+ */
+function isLexicalWordChar(char: string): boolean {
+  if (!char) return false;
+  return /[\p{L}\p{M}\p{N}]/u.test(char);
+}
+
+/**
+ * Split an original-case identifier segment on camelCase/acronym boundaries.
+ * `getHTTPResponse` -> `["get", "HTTP", "Response"]`,
+ * `XMLHttpRequest` -> `["XML", "Http", "Request"]`.
+ * Letter/digit transitions alone never split (so `word0` stays intact).
+ */
+function splitCamelComponents(segment: string): string[] {
+  const normalized = segment.normalize("NFC");
+  const chars = Array.from(normalized);
+  if (chars.length <= 1) return chars.length === 0 ? [] : [normalized];
+  const isLower = (ch: string): boolean => /\p{Ll}/u.test(ch);
+  const isUpper = (ch: string): boolean => /\p{Lu}/u.test(ch) || /\p{Lt}/u.test(ch);
+  const isDigit = (ch: string): boolean => /\p{N}/u.test(ch);
+  const isLowerLike = (ch: string): boolean => /\p{Ll}/u.test(ch) || /\p{Lt}/u.test(ch);
+  const parts: string[] = [];
+  let current = chars[0] ?? "";
+  for (let i = 1; i < chars.length; i++) {
+    const prev = chars[i - 1] ?? "";
+    const curr = chars[i] ?? "";
+    const next = i + 1 < chars.length ? (chars[i + 1] ?? "") : "";
+    const lowerToUpper = (isLower(prev) || isDigit(prev)) && isUpper(curr);
+    const acronymBoundary = isUpper(prev) && isUpper(curr) && isLowerLike(next);
+    if (lowerToUpper || acronymBoundary) {
+      parts.push(current);
+      current = curr;
+    } else {
+      current += curr;
+    }
+  }
+  parts.push(current);
+  return parts;
+}
+
 /** Split free text into lowercase tokens for keyword / hybrid search. */
 export function tokenizeQueryText(text: string | undefined | null): string[] {
   if (!text) return [];
-  const lower = text.toLowerCase();
+  const normalized = text.normalize("NFC");
   // Split chunks on whitespace and punctuation, but keep `. _ / -` inside a
   // chunk so full code identifiers/paths survive (e.g. `vector-search.ts`).
   // `%` and `\` are treated as delimiters so LIKE wildcards never become tokens.
-  const chunks = lower
-    .split(/[\s,;:"'()[\]{}!?*+=|&<>@#$%^`~\\]+/)
+  // Unicode-aware: anything that is not a letter/mark/number or `. _ / -`
+  // delimits (so emoji and non-ASCII punctuation are boundaries too).
+  const chunks = normalized
+    .split(/[^\p{L}\p{M}\p{N}._/-]+/u)
     .map((chunk) => chunk.trim())
     .filter(Boolean);
   const seen = new Set<string>();
@@ -96,14 +145,23 @@ export function tokenizeQueryText(text: string | undefined | null): string[] {
   for (const chunk of chunks) {
     if (out.length >= MAX_QUERY_TERMS) break;
     const cleanedChunk = chunk.replace(/^[._/-]+|[._/-]+$/g, "");
-    if (cleanedChunk.length <= 1) continue;
-    // Preserve the full identifier/path first, then its split components.
-    push(cleanedChunk);
+    if (!cleanedChunk) continue;
+    // Preserve the full identifier/path first (canonical NFC+lowercase), then
+    // its split components. Camel splitting runs on original case so `HTTP`
+    // and `Http` distinctions survive before lowercasing.
+    const fullLower = canonicalizeLexicalText(cleanedChunk).replace(/^[._/-]+|[._/-]+$/g, "");
+    if (fullLower.length <= 1) continue;
+    push(fullLower);
     if (out.length >= MAX_QUERY_TERMS) break;
     const parts = cleanedChunk.split(/[._/-]+/);
     for (const part of parts) {
       if (out.length >= MAX_QUERY_TERMS) break;
-      push(part);
+      if (!part) continue;
+      for (const camelPart of splitCamelComponents(part)) {
+        if (out.length >= MAX_QUERY_TERMS) break;
+        if (!camelPart) continue;
+        push(canonicalizeLexicalText(camelPart));
+      }
     }
   }
   return out.slice(0, MAX_QUERY_TERMS);
@@ -111,23 +169,46 @@ export function tokenizeQueryText(text: string | undefined | null): string[] {
 
 /**
  * Boundary-aware substring match: `in` must not match `index`, but `vector`
- * matches `vector-search.ts` because `-`, `.`, `/`, whitespace, and string
- * boundaries count as token boundaries (only `[a-z0-9]` continues a token).
- * Pure and case-insensitive; `%`/`_`/`\` are matched literally.
+ * matches `vector-search.ts` because `-`, `.`, `/`, whitespace, punctuation,
+ * emoji, and string boundaries count as token boundaries (only Unicode
+ * letters/marks/numbers continue a token). Component queries also match
+ * camelCase/acronym symbols (`http` matches `getHTTPResponse`) via exact
+ * component equality, never arbitrary substring. Pure and case-insensitive
+ * with NFC normalization; `%`/`_`/`\` are matched literally.
  */
 export function hasTokenBoundaryMatch(haystack: string, needle: string): boolean {
-  const hay = (haystack ?? "").toLowerCase();
-  const token = (needle ?? "").toLowerCase();
+  const token = canonicalizeLexicalText(needle ?? "");
   if (!token) return false;
+  const hayOriginal = (haystack ?? "").normalize("NFC");
+  if (!hayOriginal) return false;
+  const hay = hayOriginal.toLowerCase();
   let index = hay.indexOf(token);
   while (index !== -1) {
-    const before = index === 0 ? "" : (hay[index - 1] ?? "");
     const afterIndex = index + token.length;
-    const after = afterIndex >= hay.length ? "" : (hay[afterIndex] ?? "");
-    const beforeOk = before === "" || !/[a-z0-9]/.test(before);
-    const afterOk = after === "" || !/[a-z0-9]/.test(after);
+    // indexOf offsets are UTF-16 units; inspect complete adjacent code points
+    // so supplementary-plane letters do not masquerade as punctuation.
+    const before = Array.from(hay.slice(Math.max(0, index - 2), index)).at(-1) ?? "";
+    const after = Array.from(hay.slice(afterIndex, afterIndex + 2))[0] ?? "";
+    const beforeOk = before === "" || !isLexicalWordChar(before);
+    const afterOk = after === "" || !isLexicalWordChar(after);
     if (beforeOk && afterOk) return true;
     index = hay.indexOf(token, index + 1);
+  }
+  // Full identifiers/paths and anything with punctuation already attempted
+  // directly above; camel-component matching is only for single-word tokens.
+  if (/[^\p{L}\p{M}\p{N}]/u.test(token)) return false;
+  const chunks = hayOriginal.split(/[^\p{L}\p{M}\p{N}._/-]+/u);
+  for (const chunk of chunks) {
+    if (!chunk) continue;
+    const trimmed = chunk.replace(/^[._/-]+|[._/-]+$/g, "");
+    if (!trimmed) continue;
+    for (const segment of trimmed.split(/[._/-]+/)) {
+      if (!segment) continue;
+      for (const component of splitCamelComponents(segment)) {
+        if (!component) continue;
+        if (canonicalizeLexicalText(component) === token) return true;
+      }
+    }
   }
   return false;
 }

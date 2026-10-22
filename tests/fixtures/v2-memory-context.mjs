@@ -59,13 +59,18 @@ mock.module(moduleUrl("services/tags"), () => ({
     user: { userEmail: "fixture-user" },
   }),
 }));
-const { selectContextMemories } = await import(moduleUrl("services/context"));
+const { selectContextMemories, formatContextForPrompt: realFormatContext } = await import(
+  moduleUrl("services/context")
+);
+let useRealFormatter = false;
 mock.module(moduleUrl("services/context"), () => ({
   selectContextMemories,
-  formatContextForPrompt: async (_user, data) =>
-    data.results.length
-      ? "<memory_context>" + data.results.map((m) => m.memory).join("|") + "</memory_context>"
-      : "",
+  formatContextForPrompt: async (_user, data, options) =>
+    useRealFormatter
+      ? realFormatContext(_user, data, options)
+      : data.results.length
+        ? "<memory_context>" + data.results.map((m) => m.memory).join("|") + "</memory_context>"
+        : "",
 }));
 mock.module(moduleUrl("services/user-prompt/user-prompt-manager"), () => ({
   userPromptManager: {
@@ -209,6 +214,10 @@ histories.set("filtered", [
   { info: { role: "user" }, parts: [{ type: "text", text: "filtered query" }] },
 ]);
 output.filteredResume = await host.context("filtered");
+config.similarityThreshold = 0.8;
+output.stricterThreshold = await host.context("filtered");
+config.similarityThreshold = 0.58;
+output.restoredThreshold = await host.context("filtered");
 await host.prompt(
   "mixed",
   "<memory_context>injected text</memory_context>\nactual ranking query",
@@ -243,6 +252,21 @@ output.search = JSON.parse(
 output.zeroSearch = JSON.parse(
   await plugin.tool.memory.execute({ mode: "search", query: "explicit query", limit: 0 })
 );
+useRealFormatter = true;
+config.chatMessage.maxMemories = 2;
+config.chatMessage.maxContextChars = 900;
+memories = [
+  {
+    summary: "oversized " + "x".repeat(10000),
+    similarity: 0.99,
+    createdAt: new Date().toISOString(),
+  },
+  { summary: "packing survivor alpha", similarity: 0.9, createdAt: new Date().toISOString() },
+  { summary: "packing survivor beta", similarity: 0.8, createdAt: new Date().toISOString() },
+  { summary: "packing extra gamma", similarity: 0.7, createdAt: new Date().toISOString() },
+];
+await host.prompt("packing", "pack complete memories", "msg-packing");
+output.packing = await host.context("packing");
 await host.cleanup();
 await plugin.dispose();
 console.log(JSON.stringify(output));
