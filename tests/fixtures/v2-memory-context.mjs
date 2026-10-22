@@ -120,13 +120,27 @@ async function adapter() {
       return event.prompt.text;
     },
     async context(sessionID) {
+      const transientBrand = Symbol.for("opencode.transient-context.v1");
       const event = {
         sessionID,
         model: { providerID: "fixture", id: "fixture" },
         system: [],
+        messages: [],
       };
       await hooks.get("context")(event);
-      return event.system.map((p) => p.text);
+      if (event.system.length !== 0) {
+        throw new Error("memory context leaked into the fixed system prefix");
+      }
+      return event.messages
+        .filter((message) => message?.[transientBrand] === "memory")
+        .map((message) =>
+          Array.isArray(message?.content)
+            ? message.content
+                .filter((part) => part?.type === "text")
+                .map((part) => part.text)
+                .join("\n")
+            : message?.text
+        );
     },
     cleanup,
   };

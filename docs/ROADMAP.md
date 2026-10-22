@@ -1,5 +1,11 @@
 # Memory quality roadmap
 
+## Done: cache-stable memory context
+
+- Move the existing quoted memory payload to the request tail without changing recall, profiles, refresh, suppression, configuration invalidation or race protection.
+- No new persistence, model calls, feature removal or service restart. Verify native message compatibility and unchanged prior-prefix bytes.
+- Coordinator verified 24 focused tests, typecheck, touched-file format/lint, non-destructive TypeScript emit and native OpenAI/Anthropic cross-plugin lowering. One integrated independent review passed; the live watcher subscribed to the new compiled tail helper and the plugin remained active in three checked locations.
+
 ## Done: deterministic hybrid ranking
 
 - Commit `1b5a9f7` repairs lexical candidate truncation and hydration scoring, keeps actual components/provenance, and stabilizes ties.

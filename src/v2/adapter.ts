@@ -4,6 +4,7 @@ import { log } from "../services/logger.js";
 import { onSkillsChanged, skillsManager } from "../services/skills/skills-manager.js";
 import { getTags } from "../services/tags.js";
 import { eventBelongsToLocation, legacyToolResult, toLegacyEvent } from "./legacy-client.js";
+import { createMemoryTailMessage, withoutMemoryTailMessages } from "./transient-memory-message.js";
 
 interface MemoryContextHooks {
   enabled(): boolean;
@@ -233,7 +234,19 @@ export async function registerV2Adapter(ctx: Context, legacy: any) {
       }
     }
     const injected = suppressed.has(event.sessionID) ? undefined : contexts.get(event.sessionID);
-    if (injected) event.system.push({ type: "text", text: injected });
+    // Cache-stable placement: the complete memory payload rides the outgoing
+    // conversation tail as a transient native user message. The system prefix
+    // stays fixed so memory refreshes never invalidate provider caching.
+    const currentMessages = (event as { messages?: unknown }).messages;
+    if (typeof injected === "string" && injected) {
+      const base = Array.isArray(currentMessages) ? withoutMemoryTailMessages(currentMessages) : [];
+      event.messages = [...base, createMemoryTailMessage(injected)] as any;
+    } else if (Array.isArray(currentMessages)) {
+      const stripped = withoutMemoryTailMessages(currentMessages);
+      if (stripped.length !== currentMessages.length) {
+        event.messages = [...stripped] as any;
+      }
+    }
 
     if (legacy["chat.params"]) {
       await legacy["chat.params"]({

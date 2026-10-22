@@ -31,10 +31,24 @@ describe("OpenCode v2 plugin adapter", () => {
     );
     const prompt = (id: string) =>
       hooks.get("prompt")!({ sessionID: "session", messageID: id, prompt: { text: id } });
+    const tailTexts = (event: any) =>
+      ((event.messages ?? []) as any[])
+        .map(
+          (message) =>
+            (Array.isArray(message?.content)
+              ? message.content
+                  .filter((part: any) => part?.type === "text")
+                  .map((part: any) => part.text ?? "")
+                  .join("\n")
+              : (message?.text ?? "")) as string
+        )
+        .filter((text) => text);
     const context = async () => {
-      const event = { sessionID: "session", model: {}, system: [] };
+      const event: any = { sessionID: "session", model: {}, system: [], messages: [] };
       await hooks.get("context")!(event);
-      return event.system;
+      // The system prefix stays fixed; memory rides the conversation tail.
+      expect(event.system).toEqual([]);
+      return tailTexts(event);
     };
     try {
       const older = prompt("older");
@@ -43,7 +57,7 @@ describe("OpenCode v2 plugin adapter", () => {
       await older;
       expect(await context()).toEqual([]);
       await prompt("real");
-      expect(await context()).toEqual([{ type: "text", text: "authored context" }]);
+      expect(await context()).toEqual(["authored context"]);
     } finally {
       await cleanup();
     }
@@ -85,9 +99,17 @@ describe("OpenCode v2 plugin adapter", () => {
       event: async () => {},
     });
     async function context(sessionID: string) {
-      const event = { sessionID, model: {}, system: [] as any[] };
+      const event: any = { sessionID, model: {}, system: [] as any[], messages: [] as any[] };
       await hooks.get("context")!(event);
-      return event.system.map((part) => part.text);
+      expect(event.system).toEqual([]);
+      return (event.messages as any[]).map((message) =>
+        Array.isArray(message?.content)
+          ? message.content
+              .filter((part: any) => part?.type === "text")
+              .map((part: any) => part.text)
+              .join("\n")
+          : message?.text
+      );
     }
     async function compact(directory: string) {
       const completed = new Promise<void>((resolve) => {
@@ -197,14 +219,23 @@ describe("OpenCode v2 plugin adapter", () => {
       messageID: "msg-1",
       prompt: { text: "Implement V2" },
     });
-    const contextEvent = {
+    const contextEvent: any = {
       sessionID: "ses-1",
       model: { providerID: "anthropic", id: "claude" },
       system: [] as Array<{ type: string; text: string }>,
+      messages: [] as any[],
     };
     await hooks.get("context")?.(contextEvent);
 
-    expect(contextEvent.system).toEqual([{ type: "text", text: "remembered context" }]);
+    expect(contextEvent.system).toEqual([]);
+    expect(contextEvent.messages).toHaveLength(1);
+    expect(contextEvent.messages[0].role).toBe("user");
+    expect(
+      (contextEvent.messages[0].content ?? [])
+        .filter((part: any) => part?.type === "text")
+        .map((part: any) => part.text)
+        .join("\n")
+    ).toBe("remembered context");
     expect(modelInput).toEqual({
       message: { id: "msg-1" },
       model: { providerID: "anthropic", id: "claude" },
