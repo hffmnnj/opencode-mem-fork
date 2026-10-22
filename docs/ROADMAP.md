@@ -14,9 +14,9 @@
 - Full suite: 832 pass, 4 skip, 0 fail, plus 31 selector/formatter tests in an isolated child. Repository check (format/lint/typecheck), runtime build, packaging checks and Node import pass. A pre-existing one-line formatting issue was corrected to make the repository check pass.
 - Live explicit memory search returned varying scores after the build. Current host injection/code reload has not been observed; no server restart or synthetic session was used.
 
-## In progress: publication
+## Published
 
-- Publish the verified commits as a topic PR against `main`.
+- [PR #3](https://github.com/hffmnnj/opencode-mem-fork/pull/3) is open against `main` from `feat/query-driven-memory`; ranking and context changes are committed as `1b5a9f7` and `aa24d89`. Not merged.
 
 ## Next phases
 
