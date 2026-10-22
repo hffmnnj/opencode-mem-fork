@@ -3,8 +3,9 @@ import { tursoShardManager } from "./shard-manager.js";
 import { log } from "../logger.js";
 import type { MemoryRecord, SearchResult, ShardInfo } from "./types.js";
 import {
+  computeLexicalCoverage,
+  computeTagBoost,
   distanceToSimilarity,
-  escapeLikePattern,
   parseSessionIdFromMetadata,
   tokenizeQueryText,
   vectorToJson,
@@ -162,35 +163,40 @@ export class TursoVectorSearch {
           ? 0
           : distanceToSimilarity(Number(row.tags_dist));
       const memoryTagsStr = String(row.tags || "");
-      // filter(Boolean): "".split(",") → [""], and "query".includes("") is always true.
-      const memoryTags = memoryTagsStr
-        .split(",")
-        .map((tag) => tag.trim().toLowerCase())
-        .filter(Boolean);
+      const contentStr = String(row.content || "");
 
-      let exactMatchBoost = 0;
-      if (queryWords.length > 0 && memoryTags.length > 0) {
-        const matches = queryWords.filter((word) =>
-          memoryTags.some((tag) => tag.includes(word) || word.includes(tag))
-        ).length;
-        exactMatchBoost = matches / Math.max(queryWords.length, 1);
-      }
+      // Boundary-aware tag boost (no arbitrary substring): `in` must not
+      // boost tag `indexing`.
+      const exactMatchBoost = computeTagBoost(memoryTagsStr, queryWords);
 
-      const keywordSim = keywordScores.get(String(row.id)) ?? 0;
+      // Recompute lexical coverage from hydrated content/tags for every
+      // candidate so a row missed by the bounded lexical candidate scan never
+      // keeps a stale keyword score of zero.
+      const keywordSim = hasKeyword
+        ? computeLexicalCoverage(contentStr, memoryTagsStr, queryWords)
+        : 0;
       const finalTagsSim = Math.max(tagsSim, exactMatchBoost);
       // With query text: blend vector + keyword. Without: keep classic 0.6/0.4.
-      const similarity = hasKeyword
+      // Weights are fixed: existing thresholds were calibrated on this scale.
+      const raw = hasKeyword
         ? contentSim * 0.5 + finalTagsSim * 0.3 + keywordSim * 0.2
         : contentSim * 0.6 + finalTagsSim * 0.4;
+      const similarity = Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0;
 
       return {
         id: String(row.id),
-        memory: String(row.content),
+        memory: contentStr,
         similarity,
+        scoreComponents: {
+          content: contentSim,
+          tags: finalTagsSim,
+          keyword: keywordSim,
+        },
         createdAt: Number(row.created_at),
         tags: memoryTagsStr ? memoryTagsStr.split(",") : [],
         metadata: parseMetadata(row.metadata),
         containerTag: String(row.container_tag),
+        sessionId: row.session_id ? String(row.session_id) : undefined,
         displayName: row.display_name ? String(row.display_name) : undefined,
         userName: row.user_name ? String(row.user_name) : undefined,
         userEmail: row.user_email ? String(row.user_email) : undefined,
@@ -201,14 +207,23 @@ export class TursoVectorSearch {
       };
     });
 
-    hydratedResults.sort((a, b) => b.similarity - a.similarity);
+    hydratedResults.sort(
+      (a, b) =>
+        b.similarity - a.similarity ||
+        (b.createdAt ?? 0) - (a.createdAt ?? 0) ||
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+    );
     return hydratedResults.slice(0, Math.max(0, limit));
   }
 
   /**
    * Keyword recall for hybrid ranking.
-   * `@tursodatabase/database` does not ship FTS5, so we use tokenized LIKE
-   * over content/tags (bounded tokens, ESCAPE-safe).
+   * `@tursodatabase/database` does not ship FTS5. At our ~1400-memory scale
+   * a scoped projection scan (`id/content/tags/created_at`) with JS
+   * boundary-aware scoring avoids per-token candidate truncation and lets us
+   * compute all bounded-term coverage before LIMIT with
+   * deterministic score/created_at/id ordering. Revisit pagination or FTS
+   * if the corpus grows an order of magnitude.
    */
   private async keywordScores(
     db: TursoDb,
@@ -219,28 +234,28 @@ export class TursoVectorSearch {
     const tokens = tokenizeQueryText(queryText);
     if (tokens.length === 0) return new Map();
 
+    const rows = await db.all(
+      containerTag === ""
+        ? `SELECT id, content, tags, created_at FROM memories`
+        : `SELECT id, content, tags, created_at FROM memories WHERE container_tag = ?`,
+      containerTag === "" ? [] : [containerTag]
+    );
+    const scored = rows
+      .map((row) => ({
+        id: String(row.id),
+        coverage: computeLexicalCoverage(String(row.content ?? ""), String(row.tags ?? ""), tokens),
+        createdAt: Number(row.created_at ?? 0),
+      }))
+      .filter((entry) => entry.coverage > 0);
+    scored.sort(
+      (a, b) =>
+        b.coverage - a.coverage ||
+        b.createdAt - a.createdAt ||
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+    );
     const scores = new Map<string, number>();
-    for (const token of tokens) {
-      const pattern = `%${escapeLikePattern(token)}%`;
-      const rows = await db.all(
-        containerTag === ""
-          ? `
-          SELECT id FROM memories
-          WHERE content LIKE ? ESCAPE '\\' OR IFNULL(tags, '') LIKE ? ESCAPE '\\'
-          LIMIT ?
-        `
-          : `
-          SELECT id FROM memories
-          WHERE container_tag = ?
-            AND (content LIKE ? ESCAPE '\\' OR IFNULL(tags, '') LIKE ? ESCAPE '\\')
-          LIMIT ?
-        `,
-        containerTag === "" ? [pattern, pattern, limit] : [containerTag, pattern, pattern, limit]
-      );
-      for (const row of rows) {
-        const id = String(row.id);
-        scores.set(id, (scores.get(id) ?? 0) + 1 / tokens.length);
-      }
+    for (const entry of scored.slice(0, Math.max(0, limit))) {
+      scores.set(entry.id, entry.coverage);
     }
     return scores;
   }
@@ -258,14 +273,14 @@ export class TursoVectorSearch {
         SELECT m.id AS id, vector_distance_cos(m.${columnName}, vector32(?)) AS dist
         FROM memories m
         WHERE m.${columnName} IS NOT NULL
-        ORDER BY dist ASC
+        ORDER BY dist ASC, m.created_at DESC, m.id ASC
         LIMIT ?
       `
         : `
         SELECT m.id AS id, vector_distance_cos(m.${columnName}, vector32(?)) AS dist
         FROM memories m
         WHERE m.${columnName} IS NOT NULL AND m.container_tag = ?
-        ORDER BY dist ASC
+        ORDER BY dist ASC, m.created_at DESC, m.id ASC
         LIMIT ?
       `,
       containerTag === "" ? [queryJson, k] : [queryJson, containerTag, k]
@@ -323,7 +338,12 @@ export class TursoVectorSearch {
     }
 
     const allResults = resultsArray.flat();
-    allResults.sort((a, b) => b.similarity - a.similarity);
+    allResults.sort(
+      (a, b) =>
+        b.similarity - a.similarity ||
+        (b.createdAt ?? 0) - (a.createdAt ?? 0) ||
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+    );
     return {
       results: allResults
         .filter((result) => result.similarity >= similarityThreshold)
