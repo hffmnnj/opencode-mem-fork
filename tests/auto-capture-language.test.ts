@@ -226,9 +226,36 @@ describe("auto-capture output language", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.parsed?.systemPrompt).toContain("mixed, ambiguous, or non-linguistic");
+    expect(result.parsed?.systemPrompt).toContain("mixed or ambiguous prompts");
+    expect(result.parsed?.systemPrompt).toContain(
+      "language that dominates the current user's prompt"
+    );
+    expect(result.parsed?.systemPrompt).not.toContain("language-neutral");
     expect(result.parsed?.systemPrompt).not.toContain("You MUST write the summary in");
   });
+
+  for (const prompt of ["Get generate image plugin working ASAP", "Is generate_image working?"]) {
+    it(`keeps the current prompt language for brief English request: ${prompt}`, () => {
+      const result = runScenario({
+        transport: "opencode",
+        prompt,
+        assistantContext: "Ik heb de wijziging uitgevoerd en de fout hersteld.",
+        toolContext: "Controleer de code en voer de regressietest uit.",
+        previousMemory: "De afbeeldingengenerator is gekoppeld aan de projectconfiguratie.",
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.parsed?.systemPrompt).toContain(
+        "Infer and write the summary in the language of the current user's prompt"
+      );
+      expect(result.parsed?.systemPrompt).toContain(
+        "Ignore language in assistant responses, tools, previous memories, and this English template as language evidence"
+      );
+      expect(result.parsed?.systemPrompt).not.toContain("You MUST write the summary in Dutch");
+      expect(result.parsed?.systemPrompt).not.toContain("language-neutral");
+    });
+  }
 
   it("abstains when a short English prompt would otherwise be misdetected as Dutch", () => {
     const result = runScenario({
@@ -241,8 +268,11 @@ describe("auto-capture output language", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.parsed?.systemPrompt).toContain("mixed, ambiguous, or non-linguistic");
+    expect(result.parsed?.systemPrompt).toContain(
+      "Infer and write the summary in the language of the current user's prompt"
+    );
     expect(result.parsed?.systemPrompt).not.toContain("You MUST write the summary in Dutch");
+    expect(result.parsed?.systemPrompt).not.toContain("language-neutral");
   });
 
   it("does not treat code-only prompts as English even with non-English conversation context", () => {
@@ -256,7 +286,8 @@ describe("auto-capture output language", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.parsed?.systemPrompt).toContain("mixed, ambiguous, or non-linguistic");
+    expect(result.parsed?.systemPrompt).toContain("no natural-language text appears");
+    expect(result.parsed?.systemPrompt).not.toContain("language-neutral");
     expect(result.parsed?.systemPrompt).not.toContain("You MUST write the summary in");
   });
 });

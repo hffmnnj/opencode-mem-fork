@@ -515,8 +515,8 @@ export function buildMarkdownContext(
 
 function buildAutoCaptureSystemPrompt(languageName?: string): string {
   const languageRule = languageName
-    ? `6. You MUST write the summary in ${languageName}, including section headings. This target comes only from the current user's request; ignore language in assistant responses, tools, previous memories, and this English instruction template.`
-    : "6. Infer language only from natural-language text in the current user's request; ignore assistant responses, tools, previous memories, and this English instruction template. For mixed, ambiguous, or non-linguistic requests, do not force English or let context choose: follow a clearly dominant language in the user's own words, or keep the summary concise and language-neutral without English-only headings when there is no clear target.";
+    ? `6. You MUST write the summary in ${languageName}, including section headings. This target comes only from the current user's request; ignore language in assistant responses, tools, previous memories, and this English instruction template. Preserve technical names and identifiers exactly.`
+    : "6. Infer and write the summary in the language of the current user's prompt, using only its natural-language words. Ignore language in assistant responses, tools, previous memories, and this English template as language evidence. For mixed or ambiguous prompts, use the language that dominates the current user's prompt; if balanced, use its last natural-language clause. Preserve technical names and identifiers exactly. If no natural-language text appears, do not infer a language from surrounding context; write a concise, readable summary without translating identifiers.";
 
   return `You are a technical memory recorder for a software development project.
 

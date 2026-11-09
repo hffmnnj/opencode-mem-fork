@@ -14,6 +14,10 @@ const FALLBACK_MAP: Record<string, string> = {
 // are close, auto-capture abstains instead of letting context or English
 // scaffolding choose a language on the user's behalf.
 const MIN_LANGUAGE_SCORE_GAP = 0.24;
+// Short coding requests can score strongly but incorrectly (for example,
+// "Get generate image plugin working ASAP" ranks as Dutch), so require a
+// minimum amount of prose before auto-selecting a language.
+const MIN_NATURAL_LANGUAGE_LETTERS = 36;
 const NON_SPACED_SCRIPTS =
   /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
 
@@ -29,13 +33,15 @@ export function detectPromptLanguage(text: string): string | null {
     .replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, " ")
     .replace(/`[^`]*`/g, " ")
     .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/\b[\p{L}\p{N}]+(?:_[\p{L}\p{N}]+)+\b/gu, " ")
     .replace(/\b[\p{L}\p{N}_-]+\.[\p{L}\p{N}]{1,8}\b/gu, " ")
     .replace(/\b(?:[\p{Ll}\d]+[\p{Lu}][\p{L}\d]*|[\p{Lu}_]{2,})\b/gu, " ")
     .trim();
   const words = prose.match(/[\p{L}\p{M}]{2,}/gu) ?? [];
   const letters = prose.match(/\p{L}/gu) ?? [];
   const hasEnoughProse =
-    words.length >= 3 || (NON_SPACED_SCRIPTS.test(prose) && letters.length >= 6);
+    (words.length >= 3 && letters.length >= MIN_NATURAL_LANGUAGE_LETTERS) ||
+    (NON_SPACED_SCRIPTS.test(prose) && letters.length >= 6);
   if (!hasEnoughProse) return null;
 
   const ranked = francAll(prose, { minLength: 5 });
