@@ -414,8 +414,7 @@ export class EmbeddingService {
   private readonly fetchImpl: FetchLike;
 
   constructor(fetchImpl?: FetchLike) {
-    this.fetchImpl =
-      fetchImpl ?? ((input, init) => (globalThis.fetch as FetchLike)(input, init));
+    this.fetchImpl = fetchImpl ?? ((input, init) => (globalThis.fetch as FetchLike)(input, init));
   }
 
   private pipe: any = null;
