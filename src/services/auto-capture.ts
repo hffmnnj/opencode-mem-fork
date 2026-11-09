@@ -513,6 +513,28 @@ export function buildMarkdownContext(
   return truncateToMaxBytes(result, maxContextBytes, CONTEXT_TRUNCATION_MARKER);
 }
 
+function buildAutoCaptureSystemPrompt(languageName?: string): string {
+  const languageRule = languageName
+    ? `6. You MUST write the summary in ${languageName}, including section headings. This target comes only from the current user's request; ignore language in assistant responses, tools, previous memories, and this English instruction template.`
+    : "6. Infer language only from natural-language text in the current user's request; ignore assistant responses, tools, previous memories, and this English instruction template. For mixed, ambiguous, or non-linguistic requests, do not force English or let context choose: follow a clearly dominant language in the user's own words, or keep the summary concise and language-neutral without English-only headings when there is no clear target.";
+
+  return `You are a technical memory recorder for a software development project.
+
+RULES:
+1. ONLY capture technical work (code, bugs, features, architecture, config)
+2. SKIP non-technical by returning type="skip"
+3. NO meta-commentary or behavior analysis
+4. Include specific file names, functions, technical details
+5. Generate 2-4 technical tags (e.g., "react", "auth", "bug-fix")
+${languageRule}
+
+FORMAT:
+Use two concise sections: one describing the request and one describing the outcome. Write 1-2 sentences per section, include relevant file/function names, and follow rule 6 for the language of all summary text and headings.
+
+SKIP if: greetings, casual chat, no code/decisions made
+CAPTURE if: code changed, bug fixed, feature added, decision made`;
+}
+
 async function generateSummary(
   ctx: PluginInput,
   context: string,
@@ -562,32 +584,9 @@ async function generateSummary(
         );
       }
 
-      const { detectLanguage, getLanguageName } = await import("./language-detector.js");
-      const targetLang =
-        CONFIG.autoCaptureLanguage === "auto" || !CONFIG.autoCaptureLanguage
-          ? detectLanguage(userPrompt)
-          : CONFIG.autoCaptureLanguage;
-      const langName = getLanguageName(targetLang);
-
-      const systemPrompt = `You are a technical memory recorder for a software development project.
-
-RULES:
-1. ONLY capture technical work (code, bugs, features, architecture, config)
-2. SKIP non-technical by returning type="skip"
-3. NO meta-commentary or behavior analysis
-4. Include specific file names, functions, technical details
-5. Generate 2-4 technical tags (e.g., "react", "auth", "bug-fix")
-6. You MUST write the summary in ${langName}.
-
-FORMAT:
-## Request
-[1-2 sentences: what was requested, in ${langName}]
-
-## Outcome
-[1-2 sentences: what was done, include files/functions, in ${langName}]
-
-SKIP if: greetings, casual chat, no code/decisions made
-CAPTURE if: code changed, bug fixed, feature added, decision made`;
+      const { resolveAutoCaptureLanguageName } = await import("./language-detector.js");
+      const langName = resolveAutoCaptureLanguageName(userPrompt, CONFIG.autoCaptureLanguage);
+      const systemPrompt = buildAutoCaptureSystemPrompt(langName);
 
       const { z } = await import("zod");
       const schema = z.object({
@@ -650,38 +649,13 @@ CAPTURE if: code changed, bug fixed, feature added, decision made`;
 
   const { AIProviderFactory } = await import("./ai/ai-provider-factory.js");
   const { buildMemoryProviderConfig } = await import("./ai/provider-config.js");
-  const { detectLanguage, getLanguageName } = await import("./language-detector.js");
+  const { resolveAutoCaptureLanguageName } = await import("./language-detector.js");
 
   const providerConfig = buildMemoryProviderConfig(CONFIG);
 
   const provider = AIProviderFactory.createProvider(CONFIG.memoryProvider, providerConfig);
-
-  const targetLang =
-    CONFIG.autoCaptureLanguage === "auto" || !CONFIG.autoCaptureLanguage
-      ? detectLanguage(userPrompt)
-      : CONFIG.autoCaptureLanguage;
-
-  const langName = getLanguageName(targetLang);
-
-  const systemPrompt = `You are a technical memory recorder for a software development project.
-
-RULES:
-1. ONLY capture technical work (code, bugs, features, architecture, config)
-2. SKIP non-technical by returning type="skip"
-3. NO meta-commentary or behavior analysis
-4. Include specific file names, functions, technical details
-5. Generate 2-4 technical tags (e.g., "react", "auth", "bug-fix")
-6. You MUST write the summary in ${langName}.
-
-FORMAT:
-## Request
-[1-2 sentences: what was requested, in ${langName}]
-
-## Outcome
-[1-2 sentences: what was done, include files/functions, in ${langName}]
-
-SKIP if: greetings, casual chat, no code/decisions made
-CAPTURE if: code changed, bug fixed, feature added, decision made`;
+  const langName = resolveAutoCaptureLanguageName(userPrompt, CONFIG.autoCaptureLanguage);
+  const systemPrompt = buildAutoCaptureSystemPrompt(langName);
 
   const toolSchema = {
     type: "function" as const,

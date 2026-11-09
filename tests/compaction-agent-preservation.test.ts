@@ -199,7 +199,10 @@ mock.module(${JSON.stringify(webServerUrl)}, () => ({
   WebServer: class {},
 }));
 mock.module(${JSON.stringify(loggerUrl)}, () => ({ log: () => {} }));
-mock.module(${JSON.stringify(languageUrl)}, () => ({ getLanguageName: () => "English" }));
+mock.module(${JSON.stringify(languageUrl)}, () => ({
+  getLanguageName: () => "English",
+  resolveAutoCaptureLanguageName: () => "English",
+}));
 
 const mockClient = {
   session: {
