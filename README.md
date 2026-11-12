@@ -185,11 +185,11 @@ The web UI's **Stats** tab (at `/stats`) shows memory-system health at a glance:
 
 ### Intelligent prompt-based memory extraction
 
-That phrase in the feature list is **auto-capture**: after a conversation, a background AI request summarizes technical work and saves it as memory. No special prompt from you is required. It uses `opencodeProvider` / `opencodeModel` when set, otherwise the manual `memoryProvider` fallback.
+That phrase in the feature list is **auto-capture**: after a conversation, a background AI request summarizes technical work and saves it as memory. No special prompt from you is required. It uses `opencodeProvider` / `opencodeModel` when set, otherwise the manual `memoryProvider` fallback. With `autoCaptureLanguage: "auto"`, each summary's requested output language is inferred from the current user's prompt only—not assistant replies, tool content, or previous memories. Brief coding prompts may be too short for reliable automatic detection, so the summary instruction asks the model to infer language from the user's own words; for mixed prompts, use the dominant language in that prompt. If a prompt has no natural-language text, the model is told not to use surrounding context as a language signal. Detection and model compliance are best-effort, not a guarantee. Set an explicit language code to override auto-detection.
 
 ### User profile
 
-The **User Profile** is a separate, cross-project summary of how you like to work (preferences, habits). It is updated on an interval (`userProfileAnalysisInterval`, default every 10 analyzed prompts), shown in the web UI’s profile view, and readable via `memory({ mode: "profile" })`. You do not populate it by hand for normal use — profile learning fills it when a provider is ready. Output language follows `autoCaptureLanguage` (default `"auto"`, mirroring the language of your prompts), the same setting used for auto-captured memories.
+The **User Profile** is a separate, cross-project summary of how you like to work (preferences, habits). It is updated on an interval (`userProfileAnalysisInterval`, default every 10 analyzed prompts), shown in the web UI’s profile view, and readable via `memory({ mode: "profile" })`. You do not populate it by hand for normal use — profile learning fills it when a provider is ready. Profile output language continues to follow `autoCaptureLanguage` (default `"auto"`, based on the analyzed prompts); the per-prompt, ambiguity-aware detection described above applies to auto-captured memories.
 
 **“No profile found. Keep chatting to build your profile.”** is the expected empty state, not a crash. Profile learning needs:
 

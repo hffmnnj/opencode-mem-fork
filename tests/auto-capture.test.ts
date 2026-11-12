@@ -154,6 +154,7 @@ mock.module(${JSON.stringify(loggerUrl)}, () => ({ log: () => {} }));
 mock.module(${JSON.stringify(languageUrl)}, () => ({
   detectLanguage: () => "en",
   getLanguageName: () => "English",
+  resolveAutoCaptureLanguageName: () => "English",
 }));
 mock.module(${JSON.stringify(opencodeProviderLoaderUrl)}, () => ({
   loadOpencodeProvider: async () => ({
@@ -283,6 +284,7 @@ mock.module(${JSON.stringify(loggerUrl)}, () => ({ log: () => {} }));
 mock.module(${JSON.stringify(languageUrl)}, () => ({
   detectLanguage: () => "en",
   getLanguageName: () => "English",
+  resolveAutoCaptureLanguageName: () => "English",
 }));
 mock.module(${JSON.stringify(opencodeProviderLoaderUrl)}, () => ({
   loadOpencodeProvider: async () => ({
@@ -434,6 +436,7 @@ mock.module(${JSON.stringify(loggerUrl)}, () => ({ log: () => {} }));
 mock.module(${JSON.stringify(languageUrl)}, () => ({
   detectLanguage: () => "en",
   getLanguageName: () => "English",
+  resolveAutoCaptureLanguageName: () => "English",
 }));
 mock.module(${JSON.stringify(opencodeProviderLoaderUrl)}, () => ({
   loadOpencodeProvider: async () => ({
