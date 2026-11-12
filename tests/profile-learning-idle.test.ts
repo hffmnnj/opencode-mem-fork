@@ -89,7 +89,10 @@ mock.module(${JSON.stringify(privacyUrl)}, () => ({
 }));
 mock.module(${JSON.stringify(promptManagerUrl)}, () => ({ userPromptManager: { savePrompt() {} } }));
 mock.module(${JSON.stringify(loggerUrl)}, () => ({ log: () => {} }));
-mock.module(${JSON.stringify(languageUrl)}, () => ({ getLanguageName: () => "English" }));
+mock.module(${JSON.stringify(languageUrl)}, () => ({
+  getLanguageName: () => "English",
+  resolveAutoCaptureLanguageName: () => "English",
+}));
 // The web server only starts once the Turso readiness gate passes, and that
 // gate is what decides whether an owner exists at all.
 mock.module(${JSON.stringify(tursoReadyUrl)}, () => ({ ensureTursoReady: async () => {} }));

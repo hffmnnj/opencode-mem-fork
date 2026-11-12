@@ -92,6 +92,7 @@ mock.module(${JSON.stringify(u("src/services/privacy.js"))}, () => ({
 mock.module(${JSON.stringify(u("src/services/logger.js"))}, () => ({ log: () => {} }));
 mock.module(${JSON.stringify(u("src/services/language-detector.js"))}, () => ({
   detectLanguage: () => "en", getLanguageName: () => "English",
+  resolveAutoCaptureLanguageName: () => "English",
 }));
 mock.module(${JSON.stringify(u("src/services/turso/ready.js"))}, () => ({ ensureTursoReady: async () => {} }));
 mock.module(${JSON.stringify(u("src/services/web-server.js"))}, () => ({
