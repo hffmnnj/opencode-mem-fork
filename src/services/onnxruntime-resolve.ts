@@ -6,7 +6,7 @@
  * `overrides` at the install root, so `@huggingface/transformers` would otherwise
  * keep nested `onnxruntime-node@1.24.3` (no darwin/x64 binding). See #184 / #158 / #210.
  *
- * We pin onnxruntime-node@1.30.0:
+ * We pin onnxruntime-node@1.31.1:
  * - 1.21.0–1.23.2 crash during macOS Ort::Env process-exit teardown (#225 /
  *   microsoft/onnxruntime#24579); the fix shipped in 1.24.1
  * - fixed releases still lack darwin/x64 binaries (microsoft/onnxruntime#27961);
@@ -23,7 +23,7 @@ import { createRuntimeRequire } from "./runtime-require.js";
 
 const PACKAGE_NAME = "onnxruntime-node";
 const COMMON_PACKAGE = "onnxruntime-common";
-const PINNED_VERSION_HINT = "1.30.0";
+const PINNED_VERSION_HINT = "1.31.1";
 const requireFromHere = createRuntimeRequire(import.meta);
 
 let shimInstalled = false;

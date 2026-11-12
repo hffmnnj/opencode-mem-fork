@@ -217,7 +217,7 @@ function getTransformersPackageSpecifier(): string {
 
 async function ensureTransformersLoaded(): Promise<NonNullable<typeof _transformers>> {
   if (_transformers !== null) return _transformers;
-  // Pin onnxruntime-node (+ common) to our direct 1.30.0 stack before transformers
+  // Pin onnxruntime-node (+ common) to our direct 1.31.1 stack before transformers
   // resolves them (#184 / #210 / #225). Load the CJS export so Module._resolveFilename
   // shim applies — the ESM entry's static import bypasses it under OpenCode nested installs.
   //
@@ -414,8 +414,7 @@ export class EmbeddingService {
   private readonly fetchImpl: FetchLike;
 
   constructor(fetchImpl?: FetchLike) {
-    this.fetchImpl =
-      fetchImpl ?? ((input, init) => (globalThis.fetch as FetchLike)(input, init));
+    this.fetchImpl = fetchImpl ?? ((input, init) => (globalThis.fetch as FetchLike)(input, init));
   }
 
   private pipe: any = null;
