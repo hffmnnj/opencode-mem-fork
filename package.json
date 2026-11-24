@@ -25,15 +25,17 @@
     "./tags": {
       "import": "./dist/services/tags.js",
       "types": "./dist/services/tags.d.ts"
-    }
+    },
+    "./gui-experimental": "./dist/gui-experimental.cjs"
   },
   "scripts": {
-    "build": "rm -rf dist && bunx tsc && bun run web:build",
+    "build": "rm -rf dist && bunx tsc && bun run gui:build && bun run web:build",
+    "gui:build": "vite build --config vite.gui.config.ts",
     "web:dev": "cd web && bun run dev",
     "web:build": "cd web && bun run build",
     "dev": "tsc --watch",
     "test": "bun test",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.gui.json",
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -65,7 +67,7 @@
     "@opencode-ai/plugin": "^1.19.0",
     "@opencode-ai/sdk": "^1.19.0",
     "@opencode/ai": "2.0.31",
-    "@opencode/plugin": "^2.0.27",
+    "@opencode/plugin": "^2.2.0",
     "@tursodatabase/database": "^0.8.3",
     "franc-min": "^6.2.0",
     "iso-639-3": "^3.0.1",
@@ -87,8 +89,11 @@
     "lint-staged": "^17.6.0",
     "prettier": "^3.9.10",
     "prettier-plugin-svelte": "^4.1.1",
+    "solid-js": "^1.9.0",
     "typescript": "6.0.3",
-    "typescript-eslint": "^8.71.2"
+    "typescript-eslint": "^8.71.2",
+    "vite": "^7.0.0",
+    "vite-plugin-solid": "^2.11.0"
   },
   "opencode": {
     "type": "plugin",

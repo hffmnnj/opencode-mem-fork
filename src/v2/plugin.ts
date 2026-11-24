@@ -2,7 +2,10 @@ import type { Plugin } from "@opencode/plugin/promise/plugin";
 import { OpenCodeMemPlugin } from "../index.js";
 import { CONFIG } from "../config.js";
 import { loadOpencodeProvider } from "../services/ai/opencode-provider-loader.js";
+import { log } from "../services/logger.js";
 import { registerV2Adapter } from "./adapter.js";
+import { createInjectionObserver } from "./injection-observer.js";
+import { MemoryInjections } from "./injection-rpc.js";
 import { createLegacyClient } from "./legacy-client.js";
 import { MemToast } from "./toast-rpc.js";
 
@@ -28,7 +31,27 @@ const OpenCodeMemPluginV2: Plugin = {
     // the bundled provider module must not import config.js itself.
     setStructuredOutputTimeoutConfig(CONFIG.opencodeTimeoutMs);
 
-    return registerV2Adapter(ctx, legacy);
+    // Live injection inspector: report the exact string attached to the
+    // conversation tail. The changed event carries sessionID and revision
+    // only, never memory text; the GUI pulls text via latest().
+    const injections = createInjectionObserver();
+    const injectionRpc = await ctx.rpc.register(MemoryInjections, {
+      latest: async (input) => injections.latest(input),
+    });
+    const disposeAdapter = await registerV2Adapter(ctx, legacy, (attachment) => {
+      const observation = injections.record(attachment);
+      void injectionRpc.events
+        .emit("changed", { sessionID: observation.sessionID, revision: observation.revision })
+        .catch((error: unknown) => {
+          log("V2 injection event failed", { error: String(error) });
+        });
+    });
+
+    return async () => {
+      await disposeAdapter();
+      injections.clear();
+      await injectionRpc.dispose();
+    };
   },
 };
 

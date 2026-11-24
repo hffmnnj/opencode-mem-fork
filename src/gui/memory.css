@@ -1,0 +1,33 @@
+.opencode-mem-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+.opencode-mem-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.opencode-mem-spacer {
+  flex: 1;
+}
+
+.opencode-mem-secondary {
+  opacity: 0.65;
+}
+
+.opencode-mem-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.opencode-mem-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
