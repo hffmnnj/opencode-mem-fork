@@ -317,7 +317,9 @@ mock.module(${JSON.stringify(u("src/services/ai/opencode-provider-loader.js"))},
       const sid = userPrompt.includes("Fix login bug") ? "sess-A" : "sess-B";
       llmOrder.push(sid); bump(counts.llm, sid);
       if (sid === "sess-A") { llmEnteredResolve(); await gateA; }
-      return { summary: "stub " + sid, type: "discussion", tags: [] };
+      return sid === "sess-A"
+        ? { summary: "Login validates credentials in auth.ts.", type: "fact", tags: [], evidence: [{ messageId: "ai-A1", quote: "Login validates credentials in auth.ts." }] }
+        : { summary: "The export API is implemented in api.ts.", type: "fact", tags: [], evidence: [{ messageId: "ai-B1", quote: "The export API is implemented in api.ts." }] };
     },
   }),
 }));
@@ -325,11 +327,11 @@ mock.module(${JSON.stringify(u("src/services/ai/opencode-provider-loader.js"))},
 const messagesFor = {
   "sess-A": [
     { info: { id: "msg-A1", role: "user" }, parts: [{ type: "text", text: "Fix login bug" }] },
-    { info: { id: "ai-A1", role: "assistant" }, parts: [{ type: "text", text: "Fixed auth.ts" }] },
+    { info: { id: "ai-A1", role: "assistant" }, parts: [{ type: "text", text: "Login validates credentials in auth.ts." }] },
   ],
   "sess-B": [
     { info: { id: "msg-B1", role: "user" }, parts: [{ type: "text", text: "Add export API" }] },
-    { info: { id: "ai-B1", role: "assistant" }, parts: [{ type: "text", text: "Added api.ts" }] },
+    { info: { id: "ai-B1", role: "assistant" }, parts: [{ type: "text", text: "The export API is implemented in api.ts." }] },
   ],
 };
 const ctxFor = (sid) => ({
@@ -430,7 +432,7 @@ mock.module(${JSON.stringify(u("src/services/ai/opencode-provider-loader.js"))},
     generateStructuredOutput: async ({ userPrompt }) => {
       const sid = userPrompt.includes("Do work") ? "sess-X" : "?";
       bump(counts.llm, sid);
-      return { summary: "s", type: "discussion", tags: [] };
+      return { summary: "The cache expires after one hour.", type: "fact", tags: [], evidence: [{ messageId: "ai-X1", quote: "The cache expires after one hour." }] };
     },
   }),
 }));
@@ -438,7 +440,7 @@ const ctx = {
   client: {
     session: { messages: async () => ({ data: [
       { info: { id: "msg-X1", role: "user" }, parts: [{ type: "text", text: "Do work" }] },
-      { info: { id: "ai-X1", role: "assistant" }, parts: [{ type: "text", text: "Did work" }] },
+      { info: { id: "ai-X1", role: "assistant" }, parts: [{ type: "text", text: "The cache expires after one hour." }] },
     ] }) },
     tui: { showToast: async () => ({}) },
   },
@@ -505,7 +507,7 @@ mock.module(${JSON.stringify(u("src/services/ai/opencode-provider-loader.js"))},
     getV2Client: () => ({}),
     generateStructuredOutput: async ({ userPrompt }) => {
       if (userPrompt.includes("Will fail")) throw new Error("llm exploded");
-      return { summary: "ok", type: "discussion", tags: [] };
+      return { summary: "The cache expires after one hour.", type: "fact", tags: [], evidence: [{ messageId: "ai-B1", quote: "The cache expires after one hour." }] };
     },
   }),
 }));
@@ -516,7 +518,7 @@ const messagesFor = {
   ],
   "sess-B": [
     { info: { id: "msg-B1", role: "user" }, parts: [{ type: "text", text: "Will pass" }] },
-    { info: { id: "ai-B1", role: "assistant" }, parts: [{ type: "text", text: "done" }] },
+    { info: { id: "ai-B1", role: "assistant" }, parts: [{ type: "text", text: "The cache expires after one hour." }] },
   ],
 };
 const ctxFor = (sid) => ({
@@ -613,14 +615,14 @@ mock.module(${JSON.stringify(u("src/services/ai/opencode-provider-loader.js"))},
       const sid = userPrompt.includes("In flight") ? "sess-A" : "sess-B";
       bump(counts.llm, sid);
       if (sid === "sess-A") await gateA;
-      return { summary: "s", type: "discussion", tags: [] };
+      return { summary: "The cache expires after one hour.", type: "fact", tags: [], evidence: [{ messageId: "ai-A1", quote: "The cache expires after one hour." }] };
     },
   }),
 }));
 const messagesFor = {
   "sess-A": [
     { info: { id: "msg-A1", role: "user" }, parts: [{ type: "text", text: "In flight" }] },
-    { info: { id: "ai-A1", role: "assistant" }, parts: [{ type: "text", text: "a" }] },
+    { info: { id: "ai-A1", role: "assistant" }, parts: [{ type: "text", text: "The cache expires after one hour." }] },
   ],
   "sess-B": [
     { info: { id: "msg-B1", role: "user" }, parts: [{ type: "text", text: "Queued" }] },

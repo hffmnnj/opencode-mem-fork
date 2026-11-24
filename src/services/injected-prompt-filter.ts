@@ -38,6 +38,13 @@ const DEFAULT_INJECTION_MARKERS: readonly string[] = [
   "<auto-slash-command>",
 ];
 
+export const RESTORED_MEMORY_HEADING = "## Restored Session Memory";
+
+/** Legacy hosts may lose the synthetic flag when admitting restoration text. */
+export function isRestoredMemoryPromptMessage(text: string): boolean {
+  return text.trimStart().startsWith(RESTORED_MEMORY_HEADING);
+}
+
 export function getDefaultInjectionMarkers(): readonly string[] {
   return DEFAULT_INJECTION_MARKERS;
 }

@@ -85,7 +85,7 @@ function resolveTrustedWindowsShell(untrustedRoot: string): string | null {
   return null;
 }
 
-function resolveTrustedGitCommand(directory: string): GitCommand | null {
+export function resolveTrustedGitCommand(directory: string): GitCommand | null {
   const untrustedRoot = findUntrustedProjectRoot(directory);
   const executableNames =
     process.platform === "win32" ? ["git.exe", "git.cmd", "git.bat"] : ["git"];

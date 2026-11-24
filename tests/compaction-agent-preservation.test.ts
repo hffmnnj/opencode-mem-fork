@@ -143,12 +143,31 @@ const loggerUrl = new URL("../src/services/logger.js", import.meta.url).href;
 const languageUrl = new URL("../src/services/language-detector.js", import.meta.url).href;
 
 function runCompactionScenario(opts: {
-  memories: Array<{ memory: string; tags?: string[] }>;
+  memories: Array<{
+    memory: string;
+    tags?: string[];
+    id?: string;
+    containerTag?: string;
+    sessionId?: string;
+    similarity?: number;
+    retrieval?: "session";
+    createdAt?: number;
+    metadata?: Record<string, unknown>;
+  }>;
   messages: Array<{ info: Record<string, unknown> }>;
   sessionAgent?: string;
   sessionModel?: Record<string, unknown>;
   compactionEnabled?: boolean;
 }) {
+  const fixtureMemories = opts.memories.map((entry, index) => ({
+    id: `mem-${index + 1}`,
+    containerTag: "project-tag",
+    sessionId: "ses-1",
+    similarity: 1,
+    retrieval: "session" as const,
+    createdAt: Date.now(),
+    ...entry,
+  }));
   const dir = mkdtempSync(join(tmpdir(), "opencode-mem-compaction-agent-"));
   tempDirs.push(dir);
   const scriptPath = join(dir, "scenario.mjs");
@@ -164,8 +183,8 @@ mock.module(${JSON.stringify(clientUrl)}, () => ({
     isReady: async () => true,
     searchMemoriesBySessionID: async () => ({
       success: true,
-      results: ${JSON.stringify(opts.memories)},
-      total: ${opts.memories.length},
+      results: ${JSON.stringify(fixtureMemories)},
+      total: ${fixtureMemories.length},
     }),
     close() {},
   },
@@ -242,6 +261,17 @@ console.log(JSON.stringify({ promptCalls }));
 }
 
 describe("session.compacted agent preservation (#236)", () => {
+  it("labels observation time separately from unknown freshness", () => {
+    const result = runCompactionScenario({
+      sessionAgent: "my-orchestrator",
+      memories: [{ memory: "remember this", metadata: { observedAt: 123456789 } }],
+      messages: [{ info: { role: "user", agent: "my-orchestrator" } }],
+    });
+    expect(result.exitCode).toBe(0);
+    const text = result.parsed?.promptCalls[0]?.body?.parts?.[0]?.text;
+    expect(text).toContain("observed: 1970-01-02T10:17:36.789Z; freshness: unknown");
+  });
+
   it("passes the resolved custom agent to session.prompt", () => {
     const result = runCompactionScenario({
       sessionAgent: "my-orchestrator",
@@ -318,6 +348,17 @@ describe("session.compacted agent preservation (#236)", () => {
     expect(text).toContain("Imported note from the API.");
     const tagsLines = text.match(/^Tags: .*/gm) ?? [];
     expect(tagsLines).toEqual(["Tags: user-authored evidence", "Tags: canonical"]);
+  });
+
+  it("does not inject memories from another session", () => {
+    const result = runCompactionScenario({
+      sessionAgent: "my-orchestrator",
+      memories: [{ memory: "remember this", tags: ["t1"], sessionId: "ses-2" }],
+      messages: [{ info: { role: "user", agent: "my-orchestrator" } }],
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.parsed?.promptCalls).toEqual([]);
   });
 
   it("does not call session.prompt when there are no memories", () => {

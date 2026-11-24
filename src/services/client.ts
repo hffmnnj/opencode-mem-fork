@@ -10,6 +10,7 @@ import {
   type MemoryScopeRef,
 } from "./memory-scope.js";
 import { CONFIG } from "../config.js";
+import { memoryNature } from "./memory-quality.js";
 import { rerankWithJev } from "./jev.js";
 import type { JevConfig, JevRerankResult } from "./jev-types.js";
 import { log } from "./logger.js";
@@ -50,6 +51,11 @@ function resolveScopeValue(scope: MemoryScope, containerTag: string): MemoryScop
   return resolveMemoryScope(scope, containerTag);
 }
 
+/**
+ * Relevance rerank over the already scoped/thresholded hybrid baseline.
+ * Disabled, keyless, or failed runs return the baseline order untouched.
+ * Never logs the key, query, or candidate contents.
+ */
 async function applyJevRerank(
   query: string,
   results: SearchResult[],
@@ -135,7 +141,7 @@ export class LocalMemoryClient {
     query: string,
     containerTag: string,
     scope: MemoryScope = "project",
-    options: { limit?: number } = {}
+    options: { limit?: number; includeHistorical?: boolean } = {}
   ) {
     try {
       if (!query.trim()) return { success: true as const, results: [], total: 0, timing: 0 };
@@ -153,22 +159,38 @@ export class LocalMemoryClient {
         return { success: true as const, results: [], total: 0, timing: 0 };
       }
 
+      const includeHistorical = options.includeHistorical !== false;
+      const requestedLimit = Number.isFinite(options.limit)
+        ? Math.max(0, Math.min(200, Math.floor(options.limit!)))
+        : CONFIG.maxMemories;
+      // Excluding history must not let high-similarity historical summaries
+      // crowd durable/reference memories out of the requested count, so pull
+      // the bounded maximum and filter before reranking.
+      const retrievalLimit = includeHistorical ? requestedLimit : 200;
+
       const { results, warnings } = await tursoVectorSearch.searchAcrossShards(
         shards,
         queryVector,
         scope === "all-projects" ? "" : containerTag,
-        Number.isFinite(options.limit)
-          ? Math.max(0, Math.min(200, Math.floor(options.limit!)))
-          : CONFIG.maxMemories,
+        retrievalLimit,
         CONFIG.similarityThreshold,
         query
       );
 
-      const reranked = await applyJevRerank(query, results, CONFIG.jev);
+      const eligible = includeHistorical
+        ? results
+        : results.filter((result) => memoryNature(result.metadata) !== "historical");
+
+      const reranked = await applyJevRerank(query, eligible, CONFIG.jev);
+
+      const finalResults = includeHistorical
+        ? reranked.results
+        : reranked.results.slice(0, requestedLimit);
+
       return {
         success: true as const,
-        results: reranked.results,
-        total: reranked.results.length,
+        results: finalResults,
+        total: finalResults.length,
         timing: 0,
         reranking: {
           status: reranked.status,
@@ -350,6 +372,8 @@ export class LocalMemoryClient {
         projectPath: r.project_path,
         projectName: r.project_name,
         gitRepoUrl: r.git_repo_url,
+        type: r.type,
+        nature: memoryNature(safeJSONParse(r.metadata)),
       }));
 
       return {
@@ -431,7 +455,12 @@ export class LocalMemoryClient {
     }
   }
 
-  async searchMemoriesBySessionID(sessionID: string, containerTag: string, limit: number = 10) {
+  async searchMemoriesBySessionID(
+    sessionID: string,
+    containerTag: string,
+    limit: number = 10,
+    options: { includeHistorical?: boolean } = {}
+  ) {
     try {
       await this.initialize();
 
@@ -441,6 +470,8 @@ export class LocalMemoryClient {
       if (shards.length === 0) {
         return { success: true as const, results: [], total: 0, timing: 0 };
       }
+
+      const includeHistorical = options.includeHistorical !== false;
 
       const allMemories: any[] = [];
 
@@ -452,13 +483,24 @@ export class LocalMemoryClient {
 
       allMemories.sort((a, b) => Number(b.created_at) - Number(a.created_at));
 
-      const results = allMemories.slice(0, limit).map((row: any) => ({
+      const eligible = includeHistorical
+        ? allMemories
+        : allMemories.filter((row) => {
+            const rowMetadata =
+              typeof row.metadata === "string" ? safeJSONParse(row.metadata) : row.metadata;
+            return memoryNature(rowMetadata) !== "historical";
+          });
+
+      const results = eligible.slice(0, limit).map((row: any) => ({
         id: row.id,
         memory: row.content,
         similarity: 1.0,
+        retrieval: "session" as const,
         tags: row.tags || [],
         metadata: row.metadata || {},
         containerTag: row.container_tag,
+        sessionId: row.session_id ? String(row.session_id) : sessionID,
+        type: row.type,
         displayName: row.display_name,
         userName: row.user_name,
         userEmail: row.user_email,

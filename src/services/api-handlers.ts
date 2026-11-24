@@ -7,6 +7,7 @@ import { formatTagsForEmbedding, parseSessionIdFromMetadata } from "./turso/vect
 import { extractScopeFromContainerTag, tryExtractScopeFromContainerTag } from "./memory-scope.js";
 import { log } from "./logger.js";
 import { CONFIG } from "../config.js";
+import { metadataAfterContentEdit } from "./memory-quality.js";
 import type { MemoryType } from "../types/index.js";
 import { userPromptManager } from "./user-prompt/user-prompt-manager.js";
 import type { UserProfileData } from "./user-profile/types.js";
@@ -516,6 +517,12 @@ export async function handleUpdateMemory(
 
     // STEP 1: Generate new embeddings FIRST (safe — no data deleted yet)
     const newContent = data.content || String(existingMemory.content);
+    const oldMetadata = existingMemory.metadata ? String(existingMemory.metadata) : null;
+    const updatedAt = Date.now();
+    const newMetadata =
+      newContent === String(existingMemory.content)
+        ? oldMetadata
+        : metadataAfterContentEdit(oldMetadata, updatedAt);
     const existingTags = existingMemory.tags ? String(existingMemory.tags) : "";
     const tags =
       data.tags || (existingTags ? existingTags.split(",").map((t: string) => t.trim()) : []);
@@ -535,8 +542,8 @@ export async function handleUpdateMemory(
         sql: `
         INSERT INTO memories (
           id, content, vector, tags_vector, container_tag, tags, type, created_at, updated_at,
-          metadata, session_id, display_name, user_name, user_email, project_path, project_name, git_repo_url
-        ) VALUES (?, ?, vector32(?), ${tagsVector ? "vector32(?)" : "NULL"}, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          metadata, session_id, display_name, user_name, user_email, project_path, project_name, git_repo_url, is_pinned
+        ) VALUES (?, ?, vector32(?), ${tagsVector ? "vector32(?)" : "NULL"}, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
         args: [
           id,
@@ -547,8 +554,8 @@ export async function handleUpdateMemory(
           tags.length > 0 ? tags.join(",") : null,
           data.type || (existingMemory.type ? String(existingMemory.type) : null),
           Number(existingMemory.created_at),
-          Date.now(),
-          existingMemory.metadata ? String(existingMemory.metadata) : null,
+          updatedAt,
+          newMetadata,
           existingMemory.session_id
             ? String(existingMemory.session_id)
             : parseSessionIdFromMetadata(
@@ -560,6 +567,7 @@ export async function handleUpdateMemory(
           existingMemory.project_path ? String(existingMemory.project_path) : null,
           existingMemory.project_name ? String(existingMemory.project_name) : null,
           existingMemory.git_repo_url ? String(existingMemory.git_repo_url) : null,
+          Number(existingMemory.is_pinned ?? 0),
         ],
       });
     });

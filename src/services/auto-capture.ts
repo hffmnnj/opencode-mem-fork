@@ -7,19 +7,23 @@ import { CONFIG } from "../config.js";
 import { userPromptManager, type UserPrompt } from "./user-prompt/user-prompt-manager.js";
 import { loadOpencodeProvider } from "./ai/opencode-provider-loader.js";
 import { truncateToMaxBytes, utf8ByteLength } from "../utils/context-limit.js";
-
-interface ToolCallInfo {
-  name: string;
-  input: string;
-}
-
-const MAX_TOOL_INPUT_LENGTH = 100;
+import { stripPrivateContent, isFullyPrivate } from "./privacy.js";
+import { isInjectedPart } from "./injected-prompt-filter.js";
+import {
+  DURABLE_CAPTURE_VERSION,
+  buildDurableCaptureSystemPrompt,
+  captureSummarySchema,
+  validateCaptureSummary,
+  type CaptureSource,
+} from "./memory-quality.js";
+import { z } from "zod";
 const RETRY_BASE_DELAY_MS = 2000;
 const DEFAULT_AUTO_CAPTURE_MAX_CONTEXT_BYTES = 131072;
 const CONTEXT_TRUNCATION_MARKER = "\n[... truncated to autoCaptureMaxContextBytes ...]\n";
 const SUMMARY_REQUEST_OVERHEAD_BYTES = 1024;
 const SUMMARY_OUTPUT_RESERVE_BYTES = 16384;
-const SUMMARY_ANALYSIS_SUFFIX = `Analyze this conversation. If it contains technical work (code, bugs, features, decisions), create a concise summary and relevant tags. If it's non-technical (greetings, casual chat, incomplete requests), return type="skip" with empty summary.`;
+const SUMMARY_ANALYSIS_SUFFIX =
+  "Extract only reusable knowledge supported by the evidence sources above.";
 
 // Serializes captures across sessions. Replacing the old module-wide boolean
 // (which silently dropped any session whose idle fired while another capture
@@ -125,39 +129,72 @@ async function capturePrompt(
           return;
         }
 
-        const { textResponses, toolCalls } = extractAIContent(aiMessages);
-        if (textResponses.length === 0 && toolCalls.length === 0) {
+        const assistantSources = extractAIContent(aiMessages);
+        if (
+          assistantSources.length === 0 &&
+          !aiMessages.some(
+            (message) =>
+              message.info?.role === "assistant" &&
+              message.info?.summary !== true &&
+              message.info?.mode !== "compaction" &&
+              Array.isArray(message.parts) &&
+              message.parts.some((part: any) => part.type === "tool")
+          )
+        ) {
           return;
         }
 
         const tags = getTags(directory);
-        const latestMemory = await getLatestProjectMemory(tags.project.tag);
-        const context = buildMarkdownContext(
-          prompt.content,
-          textResponses,
-          toolCalls,
-          latestMemory,
-          getAutoCaptureMarkdownBudget()
-        );
+        const userText = stripPrivateContent(prompt.content);
+        const sources: CaptureSource[] = [
+          ...(!isFullyPrivate(userText)
+            ? [{ messageId: prompt.messageId, role: "user" as const, text: userText }]
+            : []),
+          ...assistantSources,
+        ];
+        const context = buildMarkdownContext(sources, getAutoCaptureMarkdownBudget());
 
-        let summaryResult: { summary: string; type: string; tags: string[] } | null;
+        let capture: ReturnType<typeof validateCaptureSummary>;
         try {
-          summaryResult = await generateSummary(ctx, context, sessionID, prompt.content, prompt);
+          const result = await generateSummary(ctx, context, sessionID, userText, prompt);
+          // Redaction placeholders are not evidence, nor may excerpts bridge them.
+          const eligibleSources = sources.flatMap((source) =>
+            source.text
+              .split("[REDACTED]")
+              .filter((text) => text.trim())
+              .map((text) => ({ ...source, text }))
+          );
+          capture = validateCaptureSummary(result, eligibleSources);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           throw new Error(`Summary generation failed: ${message}`, { cause: error });
         }
 
-        if (!summaryResult || summaryResult.type === "skip") {
+        const { summary: summaryResult, evidence } = capture;
+        if (summaryResult.type === "skip") {
           log("Auto-capture skipped", {
             promptId: prompt.id,
             sessionID,
-            type: summaryResult?.type,
+            type: summaryResult.type,
           });
           await userPromptManager.deletePrompt(prompt.id);
           claimedPromptId = null;
           return;
         }
+
+        const observedAt = latestMessageTime(aiMessages);
+        const root = summaryResult.codeAnchors?.length
+          ? (await import("./tags.js")).getGitTopLevel(directory)
+          : null;
+        const codeAnchors = root
+          ? await (
+              await import("./code-anchors.js")
+            ).validateCodeAnchors(
+              root,
+              summaryResult.codeAnchors ?? [],
+              sources.flatMap((source) => source.text.split("[REDACTED]"))
+            )
+          : [];
 
         const summaryWithTags =
           summaryResult.tags && summaryResult.tags.length > 0
@@ -165,12 +202,18 @@ async function capturePrompt(
             : summaryResult.summary;
 
         const result = await memoryClient.addMemory(summaryWithTags, tags.project.tag, {
-          source: "auto-capture" as any,
-          type: summaryResult.type as any,
+          source: "auto-capture",
+          type: summaryResult.type,
           tags: summaryResult.tags,
           sessionID,
           promptId: prompt.id,
+          captureVersion: DURABLE_CAPTURE_VERSION,
+          memoryKind: summaryResult.type,
+          sourceMessageId: prompt.messageId,
+          evidence,
           captureTimestamp: Date.now(),
+          ...(observedAt !== null ? { observedAt } : {}),
+          ...(codeAnchors.length ? { codeAnchors } : {}),
           displayName: tags.project.displayName,
           userName: tags.project.userName,
           userEmail: tags.project.userEmail,
@@ -251,6 +294,23 @@ async function capturePrompt(
   }
 }
 
+function latestMessageTime(messages: any[]): number | null {
+  let latest: number | null = null;
+  for (const message of messages) {
+    if (message.info?.role !== "assistant") continue;
+    const completed = message.info?.time?.completed;
+    const created = message.info?.time?.created;
+    const time =
+      typeof completed === "number" && Number.isFinite(completed) && completed > 0
+        ? completed
+        : created;
+    if (typeof time === "number" && Number.isFinite(time) && time > 0) {
+      latest = latest === null ? time : Math.max(latest, time);
+    }
+  }
+  return latest;
+}
+
 function getAIResponseMessages(messages: any[], promptMessageId: string): any[] | null {
   const promptIndex = messages.findIndex((m: any) => m.info?.id === promptMessageId);
   if (promptIndex === -1) return null;
@@ -263,115 +323,30 @@ function getAIResponseMessages(messages: any[], promptMessageId: string): any[] 
   return responseMessages;
 }
 
-function extractAIContent(messages: any[]): {
-  textResponses: string[];
-  toolCalls: ToolCallInfo[];
-} {
-  const textResponses: string[] = [];
-  const toolCalls: ToolCallInfo[] = [];
-
+function extractAIContent(messages: any[]): CaptureSource[] {
+  const sources: CaptureSource[] = [];
   for (const msg of messages) {
-    if (msg.info?.role !== "assistant") continue;
-
-    if (!msg.parts || !Array.isArray(msg.parts)) continue;
-
-    const textParts = msg.parts.filter((p: any) => p.type === "text" && p.text);
-    if (textParts.length > 0) {
-      const text = textParts.map((p: any) => p.text).join("\n");
-      if (text.trim()) {
-        textResponses.push(text.trim());
-      }
-    }
-
-    const toolParts = msg.parts.filter((p: any) => p.type === "tool");
-    for (const tool of toolParts) {
-      const name = tool.tool || "unknown";
-      let input = "";
-
-      if (tool.state?.input) {
-        const inputObj = tool.state.input;
-        if (typeof inputObj === "string") {
-          input = inputObj;
-        } else if (typeof inputObj === "object") {
-          const params = [];
-          for (const [key, value] of Object.entries(inputObj)) {
-            params.push(`${key}: ${JSON.stringify(value)}`);
-          }
-          input = params.join(", ");
-        }
-      }
-
-      if (input.length > MAX_TOOL_INPUT_LENGTH) {
-        input = input.substring(0, MAX_TOOL_INPUT_LENGTH) + "...";
-      }
-
-      toolCalls.push({ name, input });
-    }
-  }
-
-  return { textResponses, toolCalls };
-}
-
-async function getLatestProjectMemory(containerTag: string): Promise<string | null> {
-  try {
-    const result = await memoryClient.listMemories(containerTag, 1);
-    if (!result.success || result.memories.length === 0) {
-      return null;
-    }
-
-    const latest = result.memories[0];
-    if (!latest) {
-      return null;
-    }
-
-    const content = latest.summary;
-
-    if (content.length <= 500) {
-      return content;
-    }
-
-    return content.substring(0, 500) + "...";
-  } catch {
-    return null;
-  }
-}
-
-function fitTextResponses(textResponses: string[], maxBytes: number): string {
-  if (textResponses.length === 0 || maxBytes <= 0) return "";
-
-  const separator = "\n\n";
-  const separatorBytes = utf8ByteLength(separator);
-  const joined = textResponses.join(separator);
-  if (utf8ByteLength(joined) <= maxBytes) return joined;
-
-  // Prefer newest assistant turns; truncate older content first.
-  const kept: string[] = [];
-  let usedBytes = 0;
-
-  for (let i = textResponses.length - 1; i >= 0; i--) {
-    const response = textResponses[i] ?? "";
-    const responseBytes = utf8ByteLength(response);
-    const extraSeparator = kept.length > 0 ? separatorBytes : 0;
-    const needed = responseBytes + extraSeparator;
-
-    if (usedBytes + needed <= maxBytes) {
-      kept.unshift(response);
-      usedBytes += needed;
+    if (
+      msg.info?.role !== "assistant" ||
+      typeof msg.info.id !== "string" ||
+      !msg.info.id ||
+      msg.info.summary === true ||
+      msg.info.mode === "compaction" ||
+      !Array.isArray(msg.parts)
+    )
       continue;
-    }
-
-    const remaining = maxBytes - usedBytes - extraSeparator;
-    if (remaining > utf8ByteLength(CONTEXT_TRUNCATION_MARKER)) {
-      kept.unshift(truncateToMaxBytes(response, remaining, CONTEXT_TRUNCATION_MARKER));
-    }
-    break;
+    const parts = msg.parts.filter(
+      (part: any) =>
+        part.type === "text" &&
+        typeof part.text === "string" &&
+        part.ignored !== true &&
+        !isInjectedPart(part)
+    );
+    // Redact after joining parts so private tags spanning parts remain private.
+    const text = stripPrivateContent(parts.map((part: any) => part.text).join("\n"));
+    if (!isFullyPrivate(text)) sources.push({ messageId: msg.info.id, role: "assistant", text });
   }
-
-  return kept.join(separator);
-}
-
-function joinSections(sections: string[]): string {
-  return sections.join("\n");
+  return sources;
 }
 
 export function getAutoCaptureMarkdownBudget(
@@ -411,106 +386,35 @@ export function buildBoundedSummaryPrompt(
 
 /** Build auto-capture markdown context, capped to autoCaptureMaxContextBytes (UTF-8). */
 export function buildMarkdownContext(
-  userPrompt: string,
-  textResponses: string[],
-  toolCalls: ToolCallInfo[],
-  latestMemory: string | null,
+  sources: readonly CaptureSource[],
   maxContextBytes: number = CONFIG.autoCaptureMaxContextBytes ??
     DEFAULT_AUTO_CAPTURE_MAX_CONTEXT_BYTES
 ): string {
-  const memorySections: string[] = [];
-  if (latestMemory) {
-    memorySections.push(`## Previous Memory Context`);
-    memorySections.push(`---`);
-    memorySections.push(latestMemory);
-    memorySections.push(`---\n`);
+  const blocks: string[] = [];
+  let remaining = Math.max(0, maxContextBytes);
+  const user = sources.find((source) => source.role === "user");
+  const assistants = sources.filter((source) => source.role === "assistant");
+  const addSource = (source: CaptureSource, budget: number) => {
+    const header = `## Evidence source ${source.role} messageId=${JSON.stringify(source.messageId)}\n`;
+    const overhead = utf8ByteLength(header) + 2;
+    if (budget <= overhead) return;
+    const body = truncateToMaxBytes(source.text, budget - overhead, CONTEXT_TRUNCATION_MARKER);
+    const block = `${header}${body}\n\n`;
+    remaining -= utf8ByteLength(block);
+    blocks.push(block);
+  };
+  if (user) {
+    const reserve = assistants.length > 0 ? Math.min(4096, Math.floor(remaining * 0.25)) : 0;
+    addSource(user, remaining - reserve);
   }
-
-  const toolsSections: string[] = [];
-  if (toolCalls.length > 0) {
-    toolsSections.push(`## Tools Used`);
-    toolsSections.push(`---`);
-    for (const tool of toolCalls) {
-      if (tool.input) {
-        toolsSections.push(`- ${tool.name}(${tool.input})`);
-      } else {
-        toolsSections.push(`- ${tool.name}`);
-      }
-    }
-    toolsSections.push(`---\n`);
+  const assistantBlocks: string[] = [];
+  for (let i = assistants.length - 1; i >= 0; i--) {
+    const before = blocks.length;
+    addSource(assistants[i]!, remaining);
+    if (blocks.length === before) break;
+    assistantBlocks.unshift(blocks.pop()!);
   }
-
-  const userWrapper = ["## User Request", "---", "", "---\n"];
-  const aiWrapper =
-    textResponses.length > 0 ? ["## AI Response", "---", "", "---\n"] : ([] as string[]);
-
-  const skeletonWithoutBodies = joinSections([
-    ...memorySections,
-    ...userWrapper,
-    ...aiWrapper,
-    ...toolsSections,
-  ]);
-  const skeletonBytes = utf8ByteLength(skeletonWithoutBodies);
-
-  let userBudget = Math.max(0, maxContextBytes - skeletonBytes);
-  if (textResponses.length > 0 && userBudget > 1024) {
-    const preferredAiFloor = Math.min(4096, Math.floor(maxContextBytes * 0.25));
-    userBudget = Math.max(256, userBudget - preferredAiFloor);
-  }
-
-  const boundedUser =
-    utf8ByteLength(userPrompt) <= userBudget
-      ? userPrompt
-      : truncateToMaxBytes(userPrompt, userBudget, CONTEXT_TRUNCATION_MARKER);
-
-  const prefix = joinSections([
-    ...memorySections,
-    "## User Request",
-    "---",
-    boundedUser,
-    "---\n",
-    ...toolsSections,
-  ]);
-
-  if (textResponses.length === 0) {
-    if (utf8ByteLength(prefix) <= maxContextBytes) return prefix;
-    return truncateToMaxBytes(prefix, maxContextBytes, CONTEXT_TRUNCATION_MARKER);
-  }
-
-  // Insert AI section before tools to preserve the historical section order.
-  const prefixWithoutTools = joinSections([
-    ...memorySections,
-    "## User Request",
-    "---",
-    boundedUser,
-    "---\n",
-  ]);
-  const toolsBlock = toolsSections.length > 0 ? "\n" + joinSections(toolsSections) : "";
-  const aiWrapperBytes = utf8ByteLength(joinSections(["## AI Response", "---", "", "---\n"]));
-  const aiBudget = Math.max(
-    0,
-    maxContextBytes -
-      utf8ByteLength(prefixWithoutTools) -
-      utf8ByteLength(toolsBlock) -
-      aiWrapperBytes
-  );
-  const boundedAi = fitTextResponses(textResponses, aiBudget);
-
-  const result = joinSections([
-    ...memorySections,
-    "## User Request",
-    "---",
-    boundedUser,
-    "---\n",
-    "## AI Response",
-    "---",
-    boundedAi,
-    "---\n",
-    ...toolsSections,
-  ]);
-
-  if (utf8ByteLength(result) <= maxContextBytes) return result;
-  return truncateToMaxBytes(result, maxContextBytes, CONTEXT_TRUNCATION_MARKER);
+  return [...blocks, ...assistantBlocks].join("");
 }
 
 async function generateSummary(
@@ -519,7 +423,7 @@ async function generateSummary(
   sessionID: string,
   userPrompt: string,
   prompt?: { id?: string; providerId: string | null; modelId: string | null }
-): Promise<{ summary: string; type: string; tags: string[] } | null> {
+): Promise<unknown> {
   let opencodeProviderError: unknown;
 
   // Opencode provider path (when opencodeProvider + opencodeModel configured)
@@ -569,32 +473,8 @@ async function generateSummary(
           : CONFIG.autoCaptureLanguage;
       const langName = getLanguageName(targetLang);
 
-      const systemPrompt = `You are a technical memory recorder for a software development project.
-
-RULES:
-1. ONLY capture technical work (code, bugs, features, architecture, config)
-2. SKIP non-technical by returning type="skip"
-3. NO meta-commentary or behavior analysis
-4. Include specific file names, functions, technical details
-5. Generate 2-4 technical tags (e.g., "react", "auth", "bug-fix")
-6. You MUST write the summary in ${langName}.
-
-FORMAT:
-## Request
-[1-2 sentences: what was requested, in ${langName}]
-
-## Outcome
-[1-2 sentences: what was done, include files/functions, in ${langName}]
-
-SKIP if: greetings, casual chat, no code/decisions made
-CAPTURE if: code changed, bug fixed, feature added, decision made`;
-
-      const { z } = await import("zod");
-      const schema = z.object({
-        summary: z.string(),
-        type: z.string(),
-        tags: z.array(z.string()),
-      });
+      const systemPrompt = buildDurableCaptureSystemPrompt(langName);
+      const schema = captureSummarySchema;
       const aiPrompt = buildBoundedSummaryPrompt(context, systemPrompt, z.toJSONSchema(schema));
 
       const result = await generateStructuredOutput({
@@ -607,11 +487,7 @@ CAPTURE if: code changed, bug fixed, feature added, decision made`;
         schema,
       });
 
-      return {
-        summary: result.summary,
-        type: result.type,
-        tags: (result.tags || []).map((t: string) => t.toLowerCase().trim()),
-      };
+      return result;
     } catch (e) {
       opencodeProviderError = e;
       log("auto-capture: opencode provider failed, falling back to external API", {
@@ -663,51 +539,14 @@ CAPTURE if: code changed, bug fixed, feature added, decision made`;
 
   const langName = getLanguageName(targetLang);
 
-  const systemPrompt = `You are a technical memory recorder for a software development project.
-
-RULES:
-1. ONLY capture technical work (code, bugs, features, architecture, config)
-2. SKIP non-technical by returning type="skip"
-3. NO meta-commentary or behavior analysis
-4. Include specific file names, functions, technical details
-5. Generate 2-4 technical tags (e.g., "react", "auth", "bug-fix")
-6. You MUST write the summary in ${langName}.
-
-FORMAT:
-## Request
-[1-2 sentences: what was requested, in ${langName}]
-
-## Outcome
-[1-2 sentences: what was done, include files/functions, in ${langName}]
-
-SKIP if: greetings, casual chat, no code/decisions made
-CAPTURE if: code changed, bug fixed, feature added, decision made`;
+  const systemPrompt = buildDurableCaptureSystemPrompt(langName);
 
   const toolSchema = {
     type: "function" as const,
     function: {
       name: "save_memory",
-      description: "Save the conversation summary as a memory",
-      parameters: {
-        type: "object",
-        properties: {
-          summary: {
-            type: "string",
-            description: "Markdown-formatted summary of the conversation",
-          },
-          type: {
-            type: "string",
-            description:
-              "Type of memory: 'skip' for non-technical conversations, or technical type (feature, bug-fix, refactor, analysis, configuration, discussion, other)",
-          },
-          tags: {
-            type: "array",
-            items: { type: "string" },
-            description: "List of 2-4 technical tags related to the memory",
-          },
-        },
-        required: ["summary", "type", "tags"],
-      },
+      description: "Save reusable technical knowledge with source evidence",
+      parameters: z.toJSONSchema(captureSummarySchema),
     },
   };
   const aiPrompt = buildBoundedSummaryPrompt(context, systemPrompt, toolSchema);
@@ -724,9 +563,5 @@ CAPTURE if: code changed, bug fixed, feature added, decision made`;
     throw new Error(result.error || "Failed to generate summary");
   }
 
-  return {
-    summary: result.data.summary,
-    type: result.data.type,
-    tags: (result.data.tags || []).map((t: string) => t.toLowerCase().trim()),
-  };
+  return result.data;
 }

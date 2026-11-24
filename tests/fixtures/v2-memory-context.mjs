@@ -214,7 +214,11 @@ await host.prompt("first", "first prompt after cold reload", "msg-11");
 output.coldPrompt = await host.context("first");
 config.chatMessage.maxAgeDays = 1;
 memories = [
-  { summary: "eligible knowledge", createdAt: new Date().toISOString() },
+  {
+    summary: "eligible knowledge",
+    metadata: { observedAt: 123456789 },
+    createdAt: new Date().toISOString(),
+  },
   {
     summary: "excluded current session",
     metadata: { sessionID: "filtered" },
@@ -246,6 +250,30 @@ output.captures = captures.map(([sessionID, messageID, , text]) => ({
   messageID,
   text,
 }));
+const restoredCapturesBefore = captures.length;
+await host.prompt(
+  "first",
+  "## Restored Session Memory\n\nstale notes should not record",
+  "msg-restored"
+);
+output.restoredPrompt = await host.context("first");
+output.restoredCapturedDelta = captures.length - restoredCapturesBefore;
+const memoriesBeforeRestoredCold = memories;
+memories = [{ summary: "restored cold knowledge", createdAt: new Date().toISOString() }];
+histories.set("restored-cold", [
+  { info: { role: "user" }, parts: [{ type: "text", text: "earlier authored cold query" }] },
+  {
+    info: { role: "user" },
+    parts: [{ type: "text", text: "## Restored Session Memory\n\nstale trailing notes" }],
+  },
+  {
+    info: { role: "user" },
+    parts: [{ type: "text", text: "synthetic follow-up", synthetic: true }],
+  },
+]);
+output.restoredCold = await host.context("restored-cold");
+output.restoredColdQuery = queries[queries.length - 1]?.query;
+memories = memoriesBeforeRestoredCold;
 // V1 still injects synthetic message parts according to its history policy.
 const v1 = {
   message: { id: "v1-first" },
