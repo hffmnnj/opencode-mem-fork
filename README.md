@@ -193,6 +193,10 @@ That phrase in the feature list is **auto-capture**: after a conversation, a bac
 
 The **User Profile** is a separate, cross-project summary of how you like to work (preferences, habits). It is updated on an interval (`userProfileAnalysisInterval`, default every 10 analyzed prompts), shown in the web UI’s profile view, and readable via `memory({ mode: "profile" })`. You do not populate it by hand for normal use — profile learning fills it when a provider is ready. Output language follows `autoCaptureLanguage` (default `"auto"`, mirroring the language of your prompts), the same setting used for auto-captured memories.
 
+Automatic context receives a bounded digest of profile descriptions rather than
+workflow steps, frequency counts, or evidence. Pending and low-confidence
+patterns are withheld; the complete profile remains available through the tool.
+
 **“No profile found. Keep chatting to build your profile.”** is the expected empty state, not a crash. Profile learning needs:
 
 1. Auto-capture running with a reachable provider (`opencodeProvider` + `opencodeModel`, or a complete manual fallback with `memoryModel` + `memoryApiUrl`).
