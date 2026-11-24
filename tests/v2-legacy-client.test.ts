@@ -48,6 +48,24 @@ function createContext(overrides: Record<string, unknown> = {}) {
 }
 
 describe("OpenCode v2 legacy client bridge", () => {
+  it("preserves assistant timestamps for capture", async () => {
+    const ctx = createContext({
+      session: {
+        context: async () => [
+          {
+            id: "assistant-1",
+            type: "assistant",
+            agent: "build",
+            time: { created: 1000, completed: 2000 },
+            content: [{ type: "text", text: "A source observation" }],
+          },
+        ],
+      },
+    });
+    const result = await createLegacyClient(ctx).session.messages({ path: { id: "session-1" } });
+    expect(result.data[0].info.time).toEqual({ created: 1000, completed: 2000 });
+  });
+
   it("reports providers with active models from the provider directory", async () => {
     // Connectivity comes from ctx.provider.list() (activation auto/enabled);
     // model.list is no longer the source (broker 'opencode' hid real ids).

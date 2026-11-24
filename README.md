@@ -112,7 +112,44 @@ current memory store on its next model request, even if no new user prompt arriv
 The rebuilt context may differ from the original as memories and the profile evolve.
 Restoration does not capture a synthetic user prompt or store a second copy of the
 memory text in OpenCode plugin storage. Compaction invalidates the cached automatic
-context; the existing compaction-memory restoration also continues to run.
+context and restores eligible durable session notes through the same transient
+tail. It does not append a synthetic user request to the canonical transcript.
+Restoration and reload ignore old restoration messages when recovering the last
+authored retrieval query.
+
+### Durable knowledge, not task status
+
+Automatic capture extracts reusable **facts, decisions, procedures and pitfalls**.
+It skips progress-only turns such as reading files, creating a branch, planning a
+change, reporting test totals, or announcing PR/deployment status. A completed
+task can still yield a useful design decision or diagnosed failure; the completion
+status itself is not long-term knowledge.
+
+Every new automatic memory carries a capture version, knowledge kind, originating
+message ID, capture date and one to three exact source excerpts with user/assistant
+roles. Invalid output and excerpts that do not match eligible source messages are
+not saved. Synthetic, ignored, compaction and private-marked source text is excluded;
+tool arguments, outputs and unrelated prior memories are not sent to extraction.
+Exact excerpts establish provenance, not semantic entailment or independent
+verification. Recalled knowledge must still be checked against current code and
+live results, and it never grants authority.
+
+When available, `observedAt` dates the source conversation, not a verification
+of its claims. Automatic context labels freshness as unknown independently of
+the hybrid and Jev relevance scores. If the conversation includes an exact code
+excerpt, path, and line, capture can attach an anchor only after matching that
+excerpt against a committed revision. Its `verifiedAt` is the time of that
+excerpt match; neither the surrounding claim nor the current working tree is
+verified. Missing anchors and timestamps remain unknown, including older rows.
+Editing memory content clears the prior evidence and anchors rather than
+presenting them as support for the edited claim.
+
+Existing automatic Request/Outcome summaries remain stored and available through
+explicit `search` and `list`. They are labeled `historical` and excluded from
+automatic durable context and compaction recall. New grounded captures are labeled
+`durable`; manual and imported knowledge remains `reference`. No migration,
+re-embedding or deletion of existing memories is required. Explicit search returns
+kind, source and evidence where available without changing hybrid scores.
 
 ### Live memory injection inspector (OpenCode GUI)
 
@@ -134,17 +171,36 @@ change notifications contain session IDs and revisions, not memory text.
 
 ### Jev relevance reranking (optional)
 
-Enable the global-only `jev` configuration with `"enabled": true` and provide
-`TYPESAFE_API_KEY` in the OpenCode server environment. After scoped hybrid
-search, the plugin sends a bounded batch of the query and candidate excerpts to
-TypeSafe's `jev-1.14.0`. Private-marked spans and the configured key are removed;
-unmarked sensitive text can still be transmitted. Reranking is off by default.
+Use TypeSafe Jev as a second-stage judge after the existing scoped hybrid search:
 
-Search retains the original hybrid scores alongside separate Jev assessments.
-Confidently irrelevant entries can be omitted from the current retrieval but
-are never deleted. Timeouts, missing credentials, and invalid responses fall
-back to the baseline without retries. See [retrieval evaluation](docs/RETRIEVAL.md#jev-decision-reranking)
-for the measured results and limitations.
+```jsonc
+// ~/.config/opencode/opencode-mem.jsonc
+{
+  "jev": { "enabled": true, "timeoutMs": 2500, "maxCandidates": 12 },
+}
+```
+
+Set `TYPESAFE_API_KEY` in the **OpenCode server's environment**, not in this file.
+The `jev` section is global-only: repository-local configuration cannot enable it.
+The integration pins `jev-1.14.0` and sends one bounded batch of the query and
+candidate excerpts to TypeSafe. An explicit all-projects search can include other
+projects' excerpts. Original IDs, paths, tags and session metadata are
+not sent as separate fields. Private-marked spans and the configured TypeSafe key
+are removed; this is not a general-purpose secret detector. Unmarked sensitive
+text can still be transmitted. Reranking is off by default for other installs.
+
+Search results keep their original hybrid `similarity` and expose a separate
+`jev` assessment. Relevant evidence moves ahead of uncertain evidence; uncertain
+or truncated evidence is retained. Only confidently irrelevant, untruncated
+entries are omitted from this retrieval, never deleted from storage. Unassessed
+candidates remain available in baseline order. Missing credentials, timeouts,
+rate limits and invalid responses fall back to baseline retrieval without retries.
+The `reranking` response metadata reports the outcome, assessed/omitted counts and
+added latency. Automatic context uses the same ranking and existing filters.
+
+This does not replace embeddings or the generative model used for auto-capture.
+See [research and evaluation](docs/RETRIEVAL.md#jev-decision-reranking) for measured
+results and limitations. Disable immediately with `"jev": { "enabled": false }`.
 
 ### Using a local checkout
 
@@ -203,7 +259,7 @@ Manual search/add/list still work even if auto-capture has no provider configure
 | User preferences discovered over sessions                            | Always-on coding conventions and process                    | Team-editable skill packs shared via the same storage |
 | Facts that should follow you across chats                            | Instructions every agent should see regardless of retrieval | OpenCode-native `skill` tool (V2 plugin bridge)       |
 
-Rule of thumb: lasting always-on project instructions → `AGENTS.md`; growing work context → memory; reusable on-demand procedures → **Skills**.
+Rule of thumb: lasting always-on project instructions → `AGENTS.md`; durable project knowledge → memory; current task progress → Git and session summaries; reusable on-demand procedures → **Skills**.
 
 #### Shared Skills (V2)
 
@@ -219,7 +275,7 @@ The web UI's **Stats** tab (at `/stats`) shows memory-system health at a glance:
 
 ### Intelligent prompt-based memory extraction
 
-That phrase in the feature list is **auto-capture**: after a conversation, a background AI request summarizes technical work and saves it as memory. No special prompt from you is required. It uses `opencodeProvider` / `opencodeModel` when set, otherwise the manual `memoryProvider` fallback.
+That phrase in the feature list is **auto-capture**: after a conversation, a background AI request extracts supported durable knowledge and saves it with source excerpts, or skips the turn when there is nothing worth retaining. No special prompt from you is required. It uses `opencodeProvider` / `opencodeModel` when set, otherwise the manual `memoryProvider` fallback.
 
 ### User profile
 
@@ -514,7 +570,7 @@ versions rather than guessing.
 
 ### Auto-Capture AI Provider
 
-Auto-capture runs a background AI request to summarize technical work and save it as memory. It needs one of the provider configurations below.
+Auto-capture runs a background AI request to extract durable technical knowledge with source evidence. It needs one of the provider configurations below.
 
 **Recommended:** Use a provider that is already authenticated in opencode and supports structured output:
 

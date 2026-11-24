@@ -45,6 +45,8 @@ export interface SearchResult {
   createdAt?: number;
   tags?: string[];
   metadata?: Record<string, unknown>;
+  /** Session lookup is provenance-based recall, not a semantic similarity score. */
+  retrieval?: "session";
   displayName?: string;
   userName?: string;
   userEmail?: string;

@@ -17,6 +17,8 @@ interface MemoryContextHooks {
     output: { message: { id: string }; parts: any[] }
   ): Promise<boolean>;
   load(sessionID: string, query?: string): Promise<string>;
+  /** Restore durable session knowledge without admitting a synthetic user turn. */
+  restore?(sessionID: string): Promise<string>;
 }
 
 const memoryInput = {
@@ -65,6 +67,7 @@ export async function registerV2Adapter(
   const contexts = new Map<string, string>();
   const messageIDs = new Map<string, string>();
   const suppressed = new Set<string>();
+  const restorations = new Map<string, symbol>();
   const memoryContext = legacy.memoryContext as MemoryContextHooks | undefined;
   let configurationKey = memoryContext?.cacheKey?.();
   let contextGeneration = 0;
@@ -170,6 +173,8 @@ export async function registerV2Adapter(
   await ctx.session.hook("prompt", async (event) => {
     synchronizeContextConfiguration();
     messageIDs.set(event.sessionID, event.messageID);
+    // Authored admission supersedes any older compaction restoration.
+    restorations.delete(event.sessionID);
     const original = { type: "text", text: event.prompt.text };
     const output = { message: { id: event.messageID }, parts: [original] };
 
@@ -221,7 +226,11 @@ export async function registerV2Adapter(
     if (memoryContext) {
       if (!memoryContext.enabled()) {
         contexts.clear();
-      } else if (!suppressed.has(event.sessionID) && !contexts.has(event.sessionID)) {
+      } else if (
+        !suppressed.has(event.sessionID) &&
+        !contexts.has(event.sessionID) &&
+        !restorations.has(event.sessionID)
+      ) {
         try {
           // Rehydrate from the canonical memory store, without replaying the
           // prompt hook or persisting a second plaintext copy in host storage.
@@ -297,7 +306,34 @@ export async function registerV2Adapter(
         if (await eventBelongsToLocation(ctx, raw)) {
           const event = toLegacyEvent(raw);
           if (event.type === "session.compacted" && event.properties?.sessionID) {
-            contexts.delete(event.properties.sessionID);
+            const sessionID = event.properties.sessionID;
+            contexts.delete(sessionID);
+            if (memoryContext?.restore) {
+              const operation = Symbol("memory restoration");
+              restorations.set(sessionID, operation);
+              const generation = synchronizeContextConfiguration();
+              const messageID = messageIDs.get(sessionID);
+              try {
+                const context = await memoryContext.restore(sessionID);
+                if (
+                  restorations.get(sessionID) === operation &&
+                  synchronizeContextConfiguration() === generation &&
+                  memoryContext.enabled() &&
+                  messageIDs.get(sessionID) === messageID &&
+                  !suppressed.has(sessionID) &&
+                  !contexts.has(sessionID)
+                ) {
+                  contexts.set(sessionID, context);
+                }
+              } catch (error) {
+                log("V2 compaction memory restoration failed", { error: String(error) });
+              } finally {
+                if (restorations.get(sessionID) === operation) restorations.delete(sessionID);
+              }
+              // V2 restores only through the existing branded request tail.
+              // The legacy event handler would persist an artificial user turn.
+              continue;
+            }
           }
           await legacy.event({ event });
         }
@@ -316,6 +352,7 @@ export async function registerV2Adapter(
     contexts.clear();
     messageIDs.clear();
     suppressed.clear();
+    restorations.clear();
     await legacy.dispose?.();
   };
 }

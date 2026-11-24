@@ -4,6 +4,8 @@ import {
   filterInjectedParts,
   getDefaultInjectionMarkers,
   isInjectedPart,
+  isRestoredMemoryPromptMessage,
+  RESTORED_MEMORY_HEADING,
   stripMemoryContextBlocks,
 } from "../src/services/injected-prompt-filter.js";
 import { normalizeInjectionMarkers } from "../src/config.js";
@@ -48,6 +50,18 @@ describe("stripMemoryContextBlocks", () => {
         "before<memory_context>a<memory_context>b</memory_context>c</memory_context>after"
       )
     ).toBe("beforeafter");
+  });
+});
+
+describe("isRestoredMemoryPromptMessage", () => {
+  it("detects the restored session heading with leading whitespace", () => {
+    expect(isRestoredMemoryPromptMessage(`${RESTORED_MEMORY_HEADING}\n\nnotes`)).toBe(true);
+    expect(isRestoredMemoryPromptMessage(`  \n${RESTORED_MEMORY_HEADING}\nbody`)).toBe(true);
+  });
+
+  it("leaves authored prompts untouched", () => {
+    expect(isRestoredMemoryPromptMessage(REAL_USER_PROMPT)).toBe(false);
+    expect(isRestoredMemoryPromptMessage("")).toBe(false);
   });
 });
 

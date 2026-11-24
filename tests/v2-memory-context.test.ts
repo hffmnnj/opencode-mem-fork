@@ -84,6 +84,19 @@ describe("v2 memory context lifecycle", () => {
     expect(result.authored).toBe("authored first prompt");
   });
 
+  it("rejects restored text as capture input and recovers the earlier authored cold query", () => {
+    expect(result.restoredPrompt).toEqual([]);
+    expect(result.restoredCapturedDelta).toBe(0);
+    expect(result.restoredCold).toEqual(context("restored cold knowledge"));
+    expect(result.restoredColdQuery).toBe("earlier authored cold query");
+    expect(
+      result.queries.every((entry: any) => !String(entry.query).includes("Restored Session Memory"))
+    ).toBe(true);
+    expect(result.queries.some((entry: any) => entry.query === "earlier authored cold query")).toBe(
+      true
+    );
+  });
+
   it("retrieves authored project queries with a wider scored pool, not recent lists", () => {
     expect(result.queries[0]).toEqual({
       query: "authored first prompt",
@@ -111,6 +124,8 @@ describe("v2 memory context lifecycle", () => {
     expect(result.search.results[0].score).toBe(0.73);
     expect(result.search.results[0].scoreKind).toBe("hybrid");
     expect(result.search.results[0].similarity).toBe(73);
+    expect(result.search.results[0].observedAt).toBe(123456789);
+    expect(result.search.results[0].freshness).toBe("unknown");
     expect(result.zeroSearch.count).toBe(0);
     expect(result.zeroSearch.results).toEqual([]);
   });

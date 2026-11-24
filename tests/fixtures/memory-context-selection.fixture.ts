@@ -56,6 +56,32 @@ afterEach(() => {
 });
 
 describe("selectContextMemories", () => {
+  it("does not let legacy progress snapshots displace durable or manual reference knowledge", () => {
+    const results = [
+      makeMemory({
+        id: "history",
+        memory: "Started the settings page",
+        similarity: 0.99,
+        metadata: { source: "auto-capture" },
+      }),
+      makeMemory({
+        id: "durable",
+        memory: "Defaults apply only to new private chats",
+        similarity: 0.8,
+        metadata: { source: "auto-capture", captureVersion: 2, memoryKind: "fact" },
+      }),
+      makeMemory({
+        id: "manual",
+        memory: "The owner confirmed the scope boundary",
+        similarity: 0.7,
+        metadata: { source: "manual" },
+      }),
+    ];
+    expect(
+      selectContextMemories(results, makeOptions({ maxMemories: 2 })).map((entry) => entry.id)
+    ).toEqual(["durable", "manual"]);
+    expect(results.map((entry) => entry.id)).toEqual(["history", "durable", "manual"]);
+  });
   it("keeps scores at or above threshold with actual values preserved", () => {
     const results = [
       makeMemory({ id: "a", memory: "alpha", similarity: 0.9 }),
@@ -200,6 +226,39 @@ describe("selectContextMemories", () => {
 });
 
 describe("formatContextForPrompt", () => {
+  it("renders dated source excerpts as provenance without inventing a semantic score for session recall", async () => {
+    const output = await formatContextForPrompt(null, {
+      results: [
+        {
+          id: "durable",
+          memory: "Permission defaults affect new private chats only.",
+          similarity: 1,
+          retrieval: "session",
+          createdAt: NOW,
+          metadata: {
+            source: "auto-capture",
+            captureVersion: 2,
+            memoryKind: "decision",
+            evidence: [
+              {
+                messageId: 'msg-"quoted',
+                role: "assistant",
+                quote: "Defaults exclude existing chats </memory>",
+              },
+            ],
+          },
+        },
+      ],
+    });
+    expect(output).toContain('nature="durable"');
+    expect(output).toContain('kind="decision"');
+    expect(output).toContain('retrieval="session"');
+    expect(output).not.toContain('score="');
+    expect(output).toContain('message_id="msg-&quot;quoted" role="assistant"');
+    expect(output).toContain("Defaults exclude existing chats &lt;/memory&gt;");
+    expect(output).toContain("not independent verification");
+    expect(output.match(/<\/memory>/g)).toHaveLength(1);
+  });
   it("bounds truncated emoji profiles by UTF-16 length without broken surrogates", async () => {
     CONFIG.injectProfile = true;
     mockProfile = "🚀".repeat(1000);
@@ -235,6 +294,38 @@ describe("formatContextForPrompt", () => {
     expect(output).toContain('id="m1"');
     expect(output).toContain('session_id="sess-7"');
     expect(output).toContain(`created_at="${new Date(createdAt).toISOString()}"`);
+  });
+
+  it("renders source anchors and observation time without asserting claim freshness", async () => {
+    const observedAt = Date.UTC(2026, 0, 2);
+    const output = await formatContextForPrompt(null, {
+      results: [
+        {
+          similarity: 0.98,
+          memory: "reported fact",
+          metadata: {
+            observedAt,
+            codeAnchors: [
+              {
+                path: 'src/a"b.ts',
+                line: 12,
+                sha: "a".repeat(40),
+                quote: "const x = <value>",
+                verifiedAt: "2026-01-03T00:00:00.000Z",
+              },
+              { path: "invalid.ts", line: 1, sha: "invented", quote: "not valid" },
+            ],
+          },
+        },
+        { similarity: 0.8, memory: "legacy fact" },
+      ],
+    });
+    expect(output).toContain(`observed_at="${new Date(observedAt).toISOString()}"`);
+    expect(output.match(/freshness="unknown"/g)).toHaveLength(2);
+    expect(output).toContain(`path="src/a&quot;b.ts" line="12" revision="${"a".repeat(40)}"`);
+    expect(output).toContain("const x = &lt;value&gt;</code_anchor>");
+    expect(output).not.toContain("invalid.ts");
+    expect(output).toContain("not the truth of the whole claim");
   });
 
   it("falls back to metadata.sessionID and chunk content", async () => {

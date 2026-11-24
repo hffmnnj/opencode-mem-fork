@@ -106,6 +106,7 @@ function legacyMessage(message: any, sessionID: string): any {
         role: "assistant",
         agent: message.agent,
         mode: message.agent,
+        time: message.time,
       },
       parts: (message.content ?? []).map((part: any, index: number) => ({
         id: part.id ?? `${message.id}-${index}`,
