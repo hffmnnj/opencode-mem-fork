@@ -787,6 +787,7 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
       CONFIG.storagePath,
       CONFIG.embeddingModel,
       CONFIG.embeddingDimensions,
+      CONFIG.jev,
     ]);
   };
 
@@ -1471,6 +1472,7 @@ function formatSearchResults(query: string, results: any, limit?: number): strin
     query,
     count: memoryResults.length,
     total: allResults.length,
+    ...(results.reranking ? { reranking: results.reranking } : {}),
     results: memoryResults.map((r: any) => ({
       id: r.id,
       content: r.memory || r.chunk,
@@ -1478,6 +1480,7 @@ function formatSearchResults(query: string, results: any, limit?: number): strin
       score: r.similarity,
       scoreKind: "hybrid",
       scoreComponents: r.scoreComponents,
+      ...(r.jev ? { jev: r.jev } : {}),
       createdAt: r.createdAt,
       sessionId: r.sessionId,
     })),

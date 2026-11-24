@@ -49,3 +49,127 @@ One coordinator run measured total query p50 53.27 ms and p95 56.20 ms, includin
 The French installation paraphrase is the hybrid miss: the labeled document is third by content cosine but outside the hybrid raw top three, and the hybrid shortlist is below the configured threshold. Both ranking and threshold behavior need representative multilingual evaluation; simply lowering a cutoff is not a demonstrated fix. Per-query raw/filtered hybrid shortlists and scores are emitted so threshold decisions are visible.
 
 This small synthetic set is a regression aid, not a held-out corpus or an external benchmark. Hybrid and rank-only baselines have different threshold treatment, so the table is not an apples-to-apples claim that one ranker is universally superior. No-answer accuracy on three examples has large uncertainty. End-to-end task quality, Turso candidate recall and running-host injection remain outside this measurement.
+
+## Jev decision reranking
+
+Primary sources read on 31 October 2026. This is a measured second-stage upgrade,
+not a claim of state-of-the-art end-to-end memory performance. Web-search discovery
+was unavailable, and the research worker failed with a provider tool-choice
+incompatibility. The coordinator directly read eight public primary pages; these
+claims are self-checked, not independently verified literature findings.
+
+### Evidence and integration decisions
+
+1. **Use decisions, not generated summaries.** TypeSafe's [introduction](https://docs.typesafe.ai/introduction)
+   describes typed questions evaluated against a shared state and recommends atomic,
+   well-scoped judgments. Keep the existing generative auto-capture and embedding
+   pipeline. Ask one relevance question per candidate, in a single batch.
+2. **Pin the version and validate the whole response.** The [model reference](https://docs.typesafe.ai/models)
+   identifies Jev 1.14 as the newest release, available from 14 October 2026, and
+   warns that aliases move. The [API reference](https://docs.typesafe.ai/api/system-one)
+   and [quickstart](https://docs.typesafe.ai/introduction/quickstart) specify bearer
+   authentication, state/model/questions and named answers. The existing key
+   completed a synthetic `jev-1.14.0` request with HTTP 200 in 433 ms; this is one
+   probe, not an availability or latency guarantee.
+3. **Keep probabilities distinct from confidence and retrieval scores.** The
+   [Choice reference](https://docs.typesafe.ai/primitives/choice#response-structure)
+   defines the selected option as the highest-probability option and returns the
+   full distribution. The [confidence reference](https://docs.typesafe.ai/confidence#choice)
+   computes Choice confidence as `(max(p) - 1/n) / (1 - 1/n)`. The live probe
+   returned probability 0.87 and confidence 0.8, consistent with rounded values for
+   three choices. Neither is a measured correctness guarantee for our corpus.
+4. **Retain uncertainty and relevant contradictions.** The confidence guide says,
+   “The correct threshold values depend on your domain and the performance of the
+   model for your use case.” The initial conservative omission rule requires an
+   irrelevant choice, probability at least 0.9 and confidence at least 0.8, with
+   neither query nor candidate truncated. These are policy starting points, not
+   calibrated operating points. Unknown evidence and unassessed tails survive.
+5. **Bound state and keep deterministic safeguards in code.** TypeSafe's
+   [Jev 1.13 jaggedness report](https://docs.typesafe.ai/model-jaggedness/jev-1.13)
+   explicitly warns about literal reading, indirection, adversarial state, long
+   irrelevant context and unreliable date comparisons. That report applies to
+   1.13, not a verified defect inventory for 1.14; it motivates tests rather than
+   proving 1.14 has the same failures. Scope, age, session exclusion, thresholds,
+   deduplication, character budgets and chronological provenance stay in code.
+   A relevance decision does not determine which contradictory statement is true.
+6. **Minimize remote data, do not imply zero retention.** The model reference says
+   customer requests/responses are not used for training, but refers specifically
+   to enterprise ZDR. No account-specific retention or ZDR guarantee was verified.
+   Opt-in sends query/candidate excerpts, not original metadata fields; private
+   markers and the configured key are stripped. Arbitrary secrets embedded in
+   unmarked prose are not automatically detected. English is the documented best
+   supported language; multilingual quality requires measurement.
+7. **Evaluate memory capabilities, not vendor slogans.** The original
+   [LongMemEval repository](https://github.com/xiaowu0162/LongMemEval#-longmemeval-overview)
+   names information extraction, multi-session reasoning, knowledge updates,
+   temporal reasoning and abstention. Its labels distinguish turn/session recall
+   from answer evaluation. It also links a newer agentic V2 benchmark; that V2
+   benchmark was not evaluated here. Our small fixtures cover selected categories,
+   not the full benchmark or downstream task success.
+
+### Operational bounds
+
+- Disabled by default; uses the existing server-side `TYPESAFE_API_KEY` only.
+- Global configuration only; project-local configuration cannot opt a machine
+  into remote inference. Explicit all-projects searches can send excerpts from
+  other projects, still without separate metadata fields.
+- Defaults: 12 assessed candidates and 2500 ms. Maximum 24; one request, no retries.
+- Excerpts: query at most 8000 characters, each memory at most 2000. Serialized
+  requests above 48 KiB fall back; streamed responses are capped at 128 KiB.
+- Fixed endpoint with redirects refused; full answer-key/model/distribution
+  validation; sanitized failure codes, no remote error bodies or input logging.
+- Hybrid thresholds, original scores and provenance remain unchanged. This cannot
+  recover evidence already missed or excluded by first-stage retrieval.
+- Stored memories are never modified by reranking. Prompt-injection resistance
+  is not guaranteed by rubrics or typed output; assessments grant no authority.
+- The serialized-byte ceiling can force baseline fallback for large CJK/emoji
+  shortlists even below the character limits. Adaptive fitting is a follow-up,
+  not grounds for relaxing the outbound bound.
+
+### Reproducible evaluation
+
+Run `bun scripts/evaluate-jev.ts` with the existing TypeSafe key and configured
+remote embedding service. It compares the same thresholded hybrid candidates
+before/after Jev and reports Recall@3, MRR@3, NDCG@3, candidate recall, no-answer
+false positives, fallback counts and added latency. A separate authored shortlist
+challenge exercises negation, history, multilingual queries, distractors,
+unanswerable queries and hostile prose. Neither fixture is held out or independently
+adjudicated, and neither writes production memories. Measurements follow below.
+
+Coordinator live run with EmbeddingGemma 2, 768 dimensions, threshold 0.58 and
+`jev-1.14.0`: 12 documents, 15 corpus queries (12 answerable), cutoff 3. The
+evaluation allows 24 assessed candidates and a 10-second deadline, versus the
+runtime defaults of 12 and 2.5 seconds; this corpus never supplied more than eight
+candidates to a call, and the longest measured adapter call was 130 ms.
+
+| Metric                         | Hybrid baseline | Hybrid + Jev |
+| ------------------------------ | --------------: | -----------: |
+| Recall@3                       |          0.9167 |       0.9167 |
+| MRR@3                          |          0.9167 |       0.9167 |
+| NDCG@3                         |          0.9167 |       0.9167 |
+| No-answer false positives      |             0/3 |          0/3 |
+| Candidate entries after filter |              50 |           37 |
+
+Jev assessed 50 candidates across 11 nonempty queries and omitted 13 (26% of the
+assessed entries). This is a shortlist reduction, not a measured token-cost or
+task-success improvement. The French query's relevant document was already
+excluded by hybrid retrieval: candidate recall remained 0.9167. Four empty pools
+(that miss plus three unanswerable queries) made no HTTP call and are currently
+reported as `fallback/input-limit`, not as successful reranks.
+
+Across all 15 adapter invocations, including those four zero-work calls, added
+latency was p50 80 ms and p95 130 ms. Among the 11 nonempty calls alone, p50 was
+91 ms and p95 130 ms. These are small-run network measurements, not an SLA.
+
+All expected evidence survived in the six answerable authored challenge sets;
+the unanswerable set returned no candidates. One hostile instruction candidate
+was classified irrelevant but retained because it did not satisfy the conservative
+omission rule. Do not interpret this as prompt-injection immunity or perfect
+precision. History/correction relevance is preserved, not resolved into current
+truth. No criteria or fixture labels were tuned after observing results.
+
+An initial experiment sorted within the relevant class by its probability and
+reduced MRR@3 from 0.9167 to 0.875. That policy was rejected: certainty of class
+membership is not graded usefulness. The shipped policy preserves baseline order
+within each class, guarded by a focused regression test. The corrected run is a
+development evaluation, not an independent held-out validation.

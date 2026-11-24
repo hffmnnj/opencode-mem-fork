@@ -7,6 +7,7 @@ import { log } from "./services/logger.js";
 import { CONFIG_FILES, getProjectConfigPaths } from "./services/config-paths.js";
 import { isPlaceholderApiKey } from "./services/ai/api-key-placeholder.js";
 import { getDefaultInjectionMarkers } from "./services/injected-prompt-filter.js";
+import type { JevConfig } from "./services/jev-types.js";
 
 const CONFIG_DIR = join(homedir(), ".config", "opencode");
 const DATA_DIR = join(homedir(), ".opencode-mem");
@@ -181,6 +182,12 @@ interface OpenCodeMemConfig {
      */
     captureChildSessions?: boolean;
   };
+  /**
+   * Opt-in Jev relevance assessment (Typesafe Ai). Disabled by default; the
+   * integration reads TYPESAFE_API_KEY at call time server-side, so no key,
+   * model, or endpoint belongs in this section.
+   */
+  jev?: Partial<JevConfig>;
 }
 
 export const CHAT_MESSAGE_MAX_CONTEXT_CHARS_DEFAULT = 12000;
@@ -312,6 +319,11 @@ const DEFAULTS: Required<
     injectionMarkers: [...getDefaultInjectionMarkers()],
     captureChildSessions: false,
   },
+  jev: {
+    enabled: false,
+    timeoutMs: 2500,
+    maxCandidates: 12,
+  },
 };
 
 function expandPath(path: string): string {
@@ -363,6 +375,7 @@ const GLOBAL_ONLY_REMOTE_PROVIDER_FIELDS: ReadonlyArray<keyof OpenCodeMemConfig>
   "memoryProvider",
   "memoryApiUrl",
   "memoryApiKey",
+  "jev",
 ];
 
 function assertProjectRemoteProviderConfigIsSafe(projectConfig: OpenCodeMemConfig): void {
@@ -726,6 +739,18 @@ const CONFIG_TEMPLATE = `{
   "maxMemories": 10,
 
   // ============================================
+  // Jev Relevance Assessment (opt-in, Typesafe Ai)
+  // ============================================
+  // Optional server-side relevance check for memory search results.
+  // Disabled by default: nothing is sent anywhere unless enabled is true
+  // AND TYPESAFE_API_KEY is set in the server environment.
+  // "jev": {
+  //   "enabled": true,
+  //   "timeoutMs": 2500,
+  //   "maxCandidates": 12
+  // },
+
+  // ============================================
   // Advanced Settings
   // ============================================
   
@@ -1012,6 +1037,50 @@ export function normalizeInjectionMarkers(value: string[] | undefined): string[]
   return merged;
 }
 
+export const JEV_TIMEOUT_MS_DEFAULT = 2500;
+export const JEV_TIMEOUT_MS_MIN = 250;
+export const JEV_TIMEOUT_MS_MAX = 10000;
+export const JEV_MAX_CANDIDATES_DEFAULT = 12;
+export const JEV_MAX_CANDIDATES_MIN = 1;
+export const JEV_MAX_CANDIDATES_MAX = 24;
+
+/**
+ * Opt-in Jev relevance config from untrusted runtime input. `enabled`
+ * accepts only actual booleans — anything else stays disabled so a truthy
+ * string can never arm external calls. Numeric bounds fall back to their
+ * defaults on non-number/non-finite input, otherwise they are floored and
+ * clamped. Arrays, null, and other non-object sections are rejected.
+ */
+export function normalizeJevConfig(value: unknown): JevConfig {
+  if (value === undefined) {
+    return {
+      enabled: false,
+      timeoutMs: JEV_TIMEOUT_MS_DEFAULT,
+      maxCandidates: JEV_MAX_CANDIDATES_DEFAULT,
+    };
+  }
+  if (value === null || Array.isArray(value) || typeof value !== "object") {
+    throw new Error(`Invalid jev config: expected an object`);
+  }
+  const section = value as Partial<JevConfig>;
+  const timeoutMs =
+    typeof section.timeoutMs !== "number" || !Number.isFinite(section.timeoutMs)
+      ? JEV_TIMEOUT_MS_DEFAULT
+      : Math.min(JEV_TIMEOUT_MS_MAX, Math.max(JEV_TIMEOUT_MS_MIN, Math.floor(section.timeoutMs)));
+  const maxCandidates =
+    typeof section.maxCandidates !== "number" || !Number.isFinite(section.maxCandidates)
+      ? JEV_MAX_CANDIDATES_DEFAULT
+      : Math.min(
+          JEV_MAX_CANDIDATES_MAX,
+          Math.max(JEV_MAX_CANDIDATES_MIN, Math.floor(section.maxCandidates))
+        );
+  return {
+    enabled: typeof section.enabled === "boolean" ? section.enabled : false,
+    timeoutMs,
+    maxCandidates,
+  };
+}
+
 /**
  * Non-fatal secret resolution (F3). `resolveSecretValue` throws when an
  * `env://` variable is unset or a `file://` path is missing; a throw out of
@@ -1242,6 +1311,7 @@ function buildConfig(fileConfig: OpenCodeMemConfig) {
       captureChildSessions:
         fileConfig.chatMessage?.captureChildSessions ?? DEFAULTS.chatMessage.captureChildSessions,
     },
+    jev: normalizeJevConfig(fileConfig.jev),
   };
 }
 

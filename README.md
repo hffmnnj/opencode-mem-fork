@@ -132,6 +132,20 @@ retained in memory. Restarting or reloading the plugin clears observations; earl
 requests cannot be reconstructed. No injection history is written to disk, and live
 change notifications contain session IDs and revisions, not memory text.
 
+### Jev relevance reranking (optional)
+
+Enable the global-only `jev` configuration with `"enabled": true` and provide
+`TYPESAFE_API_KEY` in the OpenCode server environment. After scoped hybrid
+search, the plugin sends a bounded batch of the query and candidate excerpts to
+TypeSafe's `jev-1.14.0`. Private-marked spans and the configured key are removed;
+unmarked sensitive text can still be transmitted. Reranking is off by default.
+
+Search retains the original hybrid scores alongside separate Jev assessments.
+Confidently irrelevant entries can be omitted from the current retrieval but
+are never deleted. Timeouts, missing credentials, and invalid responses fall
+back to the baseline without retries. See [retrieval evaluation](docs/RETRIEVAL.md#jev-decision-reranking)
+for the measured results and limitations.
+
 ### Using a local checkout
 
 To run the plugin from a local source checkout instead of the npm release, `bun install && bun run build` in the checkout, then point the `plugins` list at the checkout directory:
