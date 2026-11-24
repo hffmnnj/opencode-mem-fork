@@ -4,6 +4,7 @@ import { log } from "../services/logger.js";
 import { onSkillsChanged, skillsManager } from "../services/skills/skills-manager.js";
 import { getTags } from "../services/tags.js";
 import { eventBelongsToLocation, legacyToolResult, toLegacyEvent } from "./legacy-client.js";
+import type { InjectionAttachment } from "./injection-rpc.js";
 import { createMemoryTailMessage, withoutMemoryTailMessages } from "./transient-memory-message.js";
 
 interface MemoryContextHooks {
@@ -53,7 +54,14 @@ const memoryInput = {
   additionalProperties: false,
 } as const;
 
-export async function registerV2Adapter(ctx: Context, legacy: any) {
+/** Synchronous hook reporting the exact memory string attached to the tail. */
+export type InjectionReporter = (attachment: InjectionAttachment) => void;
+
+export async function registerV2Adapter(
+  ctx: Context,
+  legacy: any,
+  onInjection?: InjectionReporter
+) {
   const contexts = new Map<string, string>();
   const messageIDs = new Map<string, string>();
   const suppressed = new Set<string>();
@@ -253,6 +261,31 @@ export async function registerV2Adapter(ctx: Context, legacy: any) {
         message: { id: messageIDs.get(event.sessionID) ?? event.sessionID },
         model: { providerID: event.model.providerID, id: event.model.id },
       });
+    }
+
+    if (onInjection) {
+      try {
+        const messageID = messageIDs.get(event.sessionID);
+        const text = typeof injected === "string" && injected ? injected : "";
+        let status: InjectionAttachment["status"];
+        if (text) {
+          status = "injected";
+        } else if (memoryContext && !memoryContext.enabled()) {
+          status = "disabled";
+        } else if (suppressed.has(event.sessionID)) {
+          status = "suppressed";
+        } else {
+          status = "empty";
+        }
+        onInjection({
+          sessionID: event.sessionID,
+          ...(messageID === undefined ? {} : { messageID }),
+          status,
+          text,
+        });
+      } catch (error) {
+        log("V2 injection observation failed", { error: String(error) });
+      }
     }
   });
 

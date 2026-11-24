@@ -114,6 +114,24 @@ Restoration does not capture a synthetic user prompt or store a second copy of t
 memory text in OpenCode plugin storage. Compaction invalidates the cached automatic
 context; the existing compaction-memory restoration also continues to run.
 
+### Live memory injection inspector (OpenCode GUI)
+
+Open **Memory** from the session header or the side panel's **+** menu to see the
+exact memory context attached to the latest model request. The panel updates as
+the V2 context hook runs, including when injection is empty, suppressed, or disabled.
+The timestamp identifies the observed attachment, not confirmation that a provider
+received the request. You can select or copy the raw text without editing memories.
+
+The inspector uses the plugin's `./gui-experimental` entry and requires an OpenCode
+GUI release supporting the experimental GUI plugin SDK. Desktop loads GUI plugins
+from its own background server; configure this package there as well if you normally
+connect to a different server. The existing standalone memory web UI is separate.
+
+Only the latest observation for each of up to 50 sessions per plugin location is
+retained in memory. Restarting or reloading the plugin clears observations; earlier
+requests cannot be reconstructed. No injection history is written to disk, and live
+change notifications contain session IDs and revisions, not memory text.
+
 ### Using a local checkout
 
 To run the plugin from a local source checkout instead of the npm release, `bun install && bun run build` in the checkout, then point the `plugins` list at the checkout directory:

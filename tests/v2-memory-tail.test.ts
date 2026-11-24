@@ -206,4 +206,48 @@ describe("v2 memory tail placement", () => {
       await runtime.cleanup();
     }
   });
+
+  it("reports the exact legacy-injected string through the injection callback", async () => {
+    const hooks = new Map<string, (event: any) => Promise<void>>();
+    const attachments: any[] = [];
+    const cleanup = await registerV2Adapter(
+      {
+        location: { directory: "/workspace/project" },
+        tool: { transform: async () => {} },
+        session: {
+          hook: async (name: string, callback: (event: any) => Promise<void>) => {
+            hooks.set(name, callback);
+          },
+        },
+      } as any,
+      {
+        tool: { memory: { description: "memory" } },
+        "chat.message": async (_input: any, output: any) => {
+          output.parts.push({ type: "text", text: "legacy payload" });
+        },
+        "chat.params": async () => {},
+      },
+      (attachment) => attachments.push(attachment)
+    );
+    try {
+      await hooks.get("prompt")!({
+        sessionID: "session",
+        messageID: "msg-1",
+        prompt: { text: "q" },
+      });
+      const event: any = {
+        sessionID: "session",
+        model: { providerID: "fixture", id: "fixture" },
+        system: [],
+        messages: [Message.user("q")],
+      };
+      await hooks.get("context")!(event);
+      expect(textOf(event.messages[event.messages.length - 1])).toBe("legacy payload");
+      expect(attachments).toEqual([
+        { sessionID: "session", messageID: "msg-1", status: "injected", text: "legacy payload" },
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
 });
