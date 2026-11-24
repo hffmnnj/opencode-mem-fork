@@ -12,6 +12,7 @@ const shardManagerUrl = new URL("../src/services/turso/shard-manager.js", import
 const vectorSearchUrl = new URL("../src/services/turso/vector-search.js", import.meta.url).href;
 const legacyMigratorUrl = new URL("../src/services/turso/legacy-migrator.js", import.meta.url).href;
 const readyUrl = new URL("../src/services/turso/ready.js", import.meta.url).href;
+const jevUrl = new URL("../src/services/jev.js", import.meta.url).href;
 
 function runScenario(scriptBody: string) {
   const dir = mkdtempSync(join(tmpdir(), "opencode-mem-memory-scope-"));
@@ -99,6 +100,17 @@ mock.module(${JSON.stringify(legacyMigratorUrl)}, () => ({
 
 mock.module(${JSON.stringify(readyUrl)}, () => ({
   ensureTursoReady: async () => {},
+}));
+
+// Scope traversal must not depend on the machine's optional remote reranker.
+mock.module(${JSON.stringify(jevUrl)}, () => ({
+  rerankWithJev: async (_query, results) => ({
+    results,
+    status: "disabled",
+    assessed: 0,
+    abstained: 0,
+    latencyMs: 0,
+  }),
 }));
 
 mock.module(${JSON.stringify(shardManagerUrl)}, () => ({

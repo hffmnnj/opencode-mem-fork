@@ -10,9 +10,11 @@ import {
   type MemoryScopeRef,
 } from "./memory-scope.js";
 import { CONFIG } from "../config.js";
+import { rerankWithJev } from "./jev.js";
+import type { JevConfig, JevRerankResult } from "./jev-types.js";
 import { log } from "./logger.js";
 import type { MemoryType } from "../types/index.js";
-import type { MemoryRecord } from "./turso/types.js";
+import type { MemoryRecord, SearchResult } from "./turso/types.js";
 
 export type MemoryScope = "project" | "all-projects";
 
@@ -46,6 +48,25 @@ function safeJSONParse(jsonString: any): any {
 
 function resolveScopeValue(scope: MemoryScope, containerTag: string): MemoryScopeRef[] {
   return resolveMemoryScope(scope, containerTag);
+}
+
+async function applyJevRerank(
+  query: string,
+  results: SearchResult[],
+  jev: JevConfig
+): Promise<JevRerankResult> {
+  try {
+    return await rerankWithJev(query, results, { ...jev, apiKey: process.env.TYPESAFE_API_KEY });
+  } catch {
+    return {
+      results: [...results],
+      status: "fallback",
+      reason: "request-failed",
+      assessed: 0,
+      abstained: 0,
+      latencyMs: 0,
+    };
+  }
 }
 
 export class LocalMemoryClient {
@@ -143,11 +164,19 @@ export class LocalMemoryClient {
         query
       );
 
+      const reranked = await applyJevRerank(query, results, CONFIG.jev);
       return {
         success: true as const,
-        results,
-        total: results.length,
+        results: reranked.results,
+        total: reranked.results.length,
         timing: 0,
+        reranking: {
+          status: reranked.status,
+          assessed: reranked.assessed,
+          abstained: reranked.abstained,
+          latencyMs: reranked.latencyMs,
+          ...(reranked.reason ? { reason: reranked.reason } : {}),
+        },
         ...(warnings.length > 0 ? { warnings } : {}),
       };
     } catch (error) {

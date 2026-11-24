@@ -10,6 +10,12 @@ interface MemoryResultMinimal {
   sessionId?: string;
   createdAt?: number;
   metadata?: Record<string, unknown>;
+  jev?: {
+    model?: unknown;
+    choice?: unknown;
+    confidence?: unknown;
+    probabilities?: unknown;
+  };
 }
 
 interface MemoriesResponseMinimal {
@@ -121,20 +127,22 @@ export function selectContextMemories(
     candidates.push(entry);
   }
 
-  candidates.sort((a, b) => {
-    if (b.similarity !== a.similarity) return b.similarity - a.similarity;
-    const aCreated =
-      typeof a.createdAt === "number" && Number.isFinite(a.createdAt)
-        ? a.createdAt
-        : Number.NEGATIVE_INFINITY;
-    const bCreated =
-      typeof b.createdAt === "number" && Number.isFinite(b.createdAt)
-        ? b.createdAt
-        : Number.NEGATIVE_INFINITY;
-    if (bCreated !== aCreated) return bCreated - aCreated;
-    if (a.id === b.id) return 0;
-    return a.id < b.id ? -1 : 1;
-  });
+  if (!results.some((entry) => entry.jev !== undefined)) {
+    candidates.sort((a, b) => {
+      if (b.similarity !== a.similarity) return b.similarity - a.similarity;
+      const aCreated =
+        typeof a.createdAt === "number" && Number.isFinite(a.createdAt)
+          ? a.createdAt
+          : Number.NEGATIVE_INFINITY;
+      const bCreated =
+        typeof b.createdAt === "number" && Number.isFinite(b.createdAt)
+          ? b.createdAt
+          : Number.NEGATIVE_INFINITY;
+      if (bCreated !== aCreated) return bCreated - aCreated;
+      if (a.id === b.id) return 0;
+      return a.id < b.id ? -1 : 1;
+    });
+  }
 
   const seenIds = new Set<string>();
   const seenContent = new Set<string>();
@@ -174,6 +182,25 @@ function renderMemoryBlock(entry: MemoryResultMinimal): string | null {
   const created = formatCreated(entry.createdAt);
   if (created !== null) attrs.push(`created_at="${escapeXmlAttr(created)}"`);
   attrs.push(`score="${formatScore(entry.similarity)}"`, `score_kind="hybrid"`);
+  const jevModel =
+    typeof entry.jev?.model === "string" && entry.jev.model !== "" ? entry.jev.model : null;
+  const jevChoice =
+    entry.jev?.choice === "relevant" ||
+    entry.jev?.choice === "irrelevant" ||
+    entry.jev?.choice === "unknown"
+      ? entry.jev.choice
+      : null;
+  let jevRelevantProb: string | null = null;
+  const probabilities = entry.jev?.probabilities;
+  if (probabilities !== null && typeof probabilities === "object") {
+    const relevant = (probabilities as Record<string, unknown>).relevant;
+    if (typeof relevant === "number" && Number.isFinite(relevant)) {
+      jevRelevantProb = Math.min(1, Math.max(0, relevant)).toFixed(3);
+    }
+  }
+  if (jevModel !== null) attrs.push(`jev_model="${escapeXmlAttr(jevModel)}"`);
+  if (jevChoice !== null) attrs.push(`jev_relevance="${jevChoice}"`);
+  if (jevRelevantProb !== null) attrs.push(`jev_relevant_prob="${jevRelevantProb}"`);
   return `<memory ${attrs.join(" ")}>\n${escapeXmlText(content)}\n</memory>`;
 }
 

@@ -1,3 +1,5 @@
+import type { JevAssessment } from "../jev-types.js";
+
 export interface ShardInfo {
   id: number;
   scope: "user" | "project";
@@ -36,6 +38,8 @@ export interface SearchResult {
   similarity: number;
   /** Hybrid retrieval score components, not calibrated confidence probabilities. */
   scoreComponents?: { content: number; tags: number; keyword: number };
+  /** Optional decision-model assessment; never replaces hybrid similarity. */
+  jev?: JevAssessment;
   containerTag?: string;
   sessionId?: string;
   createdAt?: number;
