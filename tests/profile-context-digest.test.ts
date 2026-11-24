@@ -146,6 +146,13 @@ describe("buildProfileDigest", () => {
           frequency: 6,
         }),
         pattern({
+          category: "single-observation",
+          description: "SINGLE-OBSERVATION",
+          confidence: 0.46,
+          frequency: 1,
+          pendingValidation: false,
+        }),
+        pattern({
           category: "legacy-established",
           description: "LEGACY-ESTABLISHED",
           confidence: undefined,
@@ -175,6 +182,7 @@ describe("buildProfileDigest", () => {
     expect(text).not.toContain("PENDING-B");
     expect(text).not.toContain("PENDING-C");
     expect(text).not.toContain("LOW-CONFIDENCE");
+    expect(text).not.toContain("SINGLE-OBSERVATION");
     expect(text).not.toContain("LEGACY-THIN");
   });
 

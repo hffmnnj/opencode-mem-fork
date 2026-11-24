@@ -21,11 +21,10 @@ const MAX_PROFILE_DIGEST_CHARS = 1200;
 const MIN_PATTERN_CONFIDENCE = 0.3;
 
 /**
- * Legacy patterns written before confidence was stored have no numeric
- * confidence to judge. Keep them only when their frequency shows repeated
- * confirmation; a single observation is not well established.
+ * A single observation is not well established, regardless of confidence.
+ * Legacy patterns without confidence also need repeated confirmation.
  */
-const MIN_LEGACY_PATTERN_FREQUENCY = 2;
+const MIN_PATTERN_FREQUENCY = 2;
 
 interface DigestSection {
   title: string;
@@ -77,11 +76,12 @@ function numericConfidence(value: unknown): number | null {
 function isPatternEligible(pattern: any): boolean {
   if (pattern?.pendingValidation) return false;
 
+  const frequency = Number(pattern?.frequency);
+  if (!Number.isFinite(frequency) || frequency < MIN_PATTERN_FREQUENCY) return false;
   const confidence = numericConfidence(pattern?.confidence);
   if (confidence !== null) return confidence >= MIN_PATTERN_CONFIDENCE;
 
-  const frequency = Number(pattern?.frequency);
-  return Number.isFinite(frequency) && frequency >= MIN_LEGACY_PATTERN_FREQUENCY;
+  return true;
 }
 
 function descriptionBullet(item: any, withCategory: boolean): string | null {
